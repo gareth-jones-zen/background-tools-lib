@@ -8,6 +8,10 @@ public interface ITask
     /// <summary>Create or replace the task (at every logon, kept running) and start it now. Returns the command line.</summary>
     string Enable(string exe, IReadOnlyList<string> args, string? workingDir);
 
+    /// <summary>Create or replace the task with these triggers and limits (a job run every few minutes, say), and
+    /// start it now unless the schedule says not to. Returns the command line.</summary>
+    string Enable(string exe, IReadOnlyList<string> args, string? workingDir, TaskSchedule schedule);
+
     /// <summary>Stop and remove the task. False if there wasn't one.</summary>
     bool Disable();
 
@@ -51,33 +55,52 @@ public sealed class ScheduledTask(string name, string description = "", IReadOnl
     }
 
     /// <summary>The PowerShell that registers the task, for tests and dry runs.</summary>
-    public string EnableScript(string exe, IReadOnlyList<string> args, string? workingDir)
+    public string EnableScript(string exe, IReadOnlyList<string> args, string? workingDir) =>
+        EnableScript(exe, args, workingDir, TaskSchedule.Watcher);
+
+    /// <summary>The PowerShell that registers the task with a given schedule (win-background's Task.enable).</summary>
+    public string EnableScript(string exe, IReadOnlyList<string> args, string? workingDir, TaskSchedule schedule)
     {
+        schedule.Validate();
         var line = Shell.ListToCommandLine(args);
         var folder = workingDir is null
             ? Environment.GetFolderPath(Environment.SpecialFolder.UserProfile)
             : Path.GetFullPath(workingDir);
-        const string limits = "-ExecutionTimeLimit ([TimeSpan]::Zero) -RestartCount 3 -RestartInterval (New-TimeSpan -Minutes 5)";
+        var triggers = new List<string>();
+        if (schedule.DailyAt is { } daily)
+            triggers.Add($"(New-ScheduledTaskTrigger -Daily -At {Shell.Quote(daily)})");
+        if (schedule.AtLogon)
+            triggers.Add("(New-ScheduledTaskTrigger -AtLogOn -User $me)");
+        if (schedule.Every is { } every)
+            // No -RepetitionDuration: without one the repetition is indefinite, and [TimeSpan]::MaxValue, the
+            // usual workaround, is refused by Windows 10 and later.
+            triggers.Add($"(New-ScheduledTaskTrigger -Once -At (Get-Date) -RepetitionInterval (New-TimeSpan -Seconds {(long)every.TotalSeconds}))");
+        var limits = schedule.KeepRunning
+            ? "-ExecutionTimeLimit ([TimeSpan]::Zero) -RestartCount 3 -RestartInterval (New-TimeSpan -Minutes 5)"
+            : $"-ExecutionTimeLimit (New-TimeSpan -Seconds {(long)schedule.TimeLimit.TotalSeconds})";
         return $"""
 
             $ErrorActionPreference = 'Stop'
             $me = "$env:USERDOMAIN\$env:USERNAME"
             $action = New-ScheduledTaskAction -Execute {Shell.Quote(exe)} -Argument {Shell.Quote(line)} -WorkingDirectory {Shell.Quote(folder)}
-            $triggers = @((New-ScheduledTaskTrigger -AtLogOn -User $me))
+            $triggers = @({string.Join(", ", triggers)})
             $settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -StartWhenAvailable `
                 {limits} -MultipleInstances IgnoreNew
             $principal = New-ScheduledTaskPrincipal -UserId $me -LogonType Interactive -RunLevel Limited
             {StopAndWait()}
             Register-ScheduledTask {Which} -Action $action -Trigger $triggers -Settings $settings -Principal $principal `
                 -Description {Shell.Quote(Description)} -Force | Out-Null
-            Start-ScheduledTask {Which}
+            {(schedule.StartNow ? "Start-ScheduledTask " + Which : "")}
 
             """;
     }
 
-    public string Enable(string exe, IReadOnlyList<string> args, string? workingDir)
+    public string Enable(string exe, IReadOnlyList<string> args, string? workingDir) =>
+        Enable(exe, args, workingDir, TaskSchedule.Watcher);
+
+    public string Enable(string exe, IReadOnlyList<string> args, string? workingDir, TaskSchedule schedule)
     {
-        var done = Shell.PowerShell(EnableScript(exe, args, workingDir));
+        var done = Shell.PowerShell(EnableScript(exe, args, workingDir, schedule));
         if (done.ExitCode != 0)
             throw new InvalidOperationException($"Couldn't create the task: {Clip(done)}");
         return $"{exe} {Shell.ListToCommandLine(args)}";
@@ -198,5 +221,36 @@ public sealed class ScheduledTask(string name, string description = "", IReadOnl
     {
         var text = (string.IsNullOrEmpty(done.StandardError) ? done.StandardOutput : done.StandardError).Trim();
         return text.Length > 400 ? text[..400] : text;
+    }
+}
+
+/// <summary>When a task runs, and for how long (win-background's Task.enable keywords).</summary>
+public sealed record TaskSchedule
+{
+    /// <summary>A watcher: at every logon, kept running, restarted up to 3 times if it exits with an error.</summary>
+    public static TaskSchedule Watcher { get; } = new();
+
+    public bool AtLogon { get; init; } = true;
+
+    /// <summary>"HH:mm": also run daily at this time.</summary>
+    public string? DailyAt { get; init; }
+
+    /// <summary>Run repeatedly at this interval, indefinitely, from now. Only for a job (KeepRunning false), and at
+    /// least a minute apart. A run still going when the next is due is left to finish, and the next is skipped.</summary>
+    public TimeSpan? Every { get; init; }
+
+    /// <summary>A watcher (true), or a job stopped after TimeLimit (false).</summary>
+    public bool KeepRunning { get; init; } = true;
+
+    public TimeSpan TimeLimit { get; init; } = TimeSpan.FromMinutes(30);
+
+    public bool StartNow { get; init; } = true;
+
+    internal void Validate()
+    {
+        if (!AtLogon && DailyAt is null && Every is null)
+            throw new ArgumentException("A task needs a trigger: at logon, daily, every, or a mix.");
+        if (Every is { } every && (KeepRunning || every < TimeSpan.FromMinutes(1)))
+            throw new ArgumentException("Every is for a job (KeepRunning false), at least a minute apart.");
     }
 }

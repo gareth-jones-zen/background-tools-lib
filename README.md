@@ -10,10 +10,12 @@ Shared .NET libraries for a set of small personal background tools on Windows: w
 |---|---|---|
 | `src/WinBackground` | Running quietly in the background on Windows: power requests (keeping the machine awake), Task Scheduler tasks, single-instance locks between processes, a log that never throws, toast notifications, child processes without a console window flashing up | Windows only (`net11.0-windows`) |
 | `src/M365Graph` | A small Microsoft Graph client: one sign-in per process, a token cache shared with the Python tools, requests with a timeout and retries, paging, and IPv4 first | Any (`net11.0`) |
+| `src/ClaudeHeadless` | Running Claude Code headless (`claude -p`) from background tools, and surviving the usage limit: one job queue per seat, shared with the Python claude-headless. Also `claude-headless.exe` and its windowless twin | Windows only (`net11.0-windows`) |
+| `src/PyCompat` | The bits of Python's behaviour a port has to reproduce exactly, so its files and output match the Python tool's byte for byte | Any (`net11.0`) |
 
 Windows-only code lives in `WinBackground` and nowhere else, so other projects can later build for other platforms, and any of them could become a NuGet package.
 
-Both libraries are AOT- and trim-checked (`IsAotCompatible`), build with warnings as errors, and publish under Native AOT with no warnings.
+All the libraries are AOT- and trim-checked (`IsAotCompatible`), build with warnings as errors, and publish under Native AOT with no warnings.
 
 ### WinBackground
 
@@ -111,6 +113,52 @@ This was checked against a copy of a real cache: .NET redeemed a refresh token P
 - **Errors.** A non-retried HTTP error is a `GraphRequestException` (status and body); a sign-in that can't happen is a `SignInNeededException`.
 - **Instance discovery is off** (see above), which also saves a call to login.microsoftonline.com.
 - **No command line.** Python's `python -m m365_graph sign-in` stays the way to sign in for now; a tool can call `TokenAsync(interactive: true)` from a console to do the same.
+
+### ClaudeHeadless
+
+A port of the Python library `claude-headless` (0.1.0):
+
+```csharp
+using ClaudeHeadless;
+
+IClaudeRunner claude = new ClaudeRunner();
+try
+{
+    var result = claude.Run(["-p", "--output-format", "json", "--model", "opus"], prompt, cwd, TimeSpan.FromMinutes(30));
+    var text = (string?)result["result"];
+}
+catch (LimitReachedException limit)
+{
+    if (JobQueue.Default.Retry([exe, "draft", path], cwd, limit.Reset))
+        Toast.Notify("Claude usage limit reached", [$"Carries on after {limit.Reset:HH:mm}"]);
+}
+```
+
+```
+claude-headless status        # the limit, and what's queued
+claude-headless run-queue     # run what's queued now, if the limit has passed
+claude-headless autostart on  # run the queue every 15 minutes and at logon (claude-headless-background.exe)
+```
+
+- **One queue per seat**, in `%LOCALAPPDATA%/claude-headless` (or `CLAUDE_HEADLESS_HOME`), whichever tool queued the job and whichever language it's written in. `queue.json` and `limit.json` are written **byte for byte as the Python version writes them** (checked against Python on a copy of a real queue), and the runner takes **the same named lock** (`claude-headless-runner-<key of the folder>`), so Python and .NET tools can share one queue while they move across, and only one runner of either kind works it at a time.
+- **The limit is read from whichever shape it comes in**: text on stderr, a JSON result with `is_error`, or an API 429. The reset time is read from the message as a wall-clock time in `CLAUDE_HEADLESS_TZ` (Europe/London by default), with Python's choice of offset in the hour the clocks change; if it can't be read, an hour from now.
+- **Once a limit is known, later runs don't start** until it has passed (plus five minutes). **One notification per limit:** `Retry()` returns true only the first time a limit is seen.
+- **The prompt goes on stdin with Windows line ends**, exactly as Python's text-mode pipe sent it, and the output is read as UTF-8 with universal newlines.
+- **Tools take `IClaudeRunner`**, so their tests give a fake and never spend usage.
+
+#### Deliberate differences from the Python version
+
+- **The current folder isn't searched for `claude`.** Python 3.12 and later look there first on Windows, so a stray `claude.cmd` in a workspace could be run.
+- **A job that runs past its timeout is killed with everything it started** (Python kills only the job itself), and **a job's stdin is closed** rather than inherited, so a job can never wait on a console.
+- **A queue file that isn't the expected shape is read as empty** rather than stopping the runner, and a time with no offset is taken as being in the seat's zone.
+- **Errors are .NET exceptions:** `LimitReachedException` (with `Reset`), `ClaudeRunException` (Python's RuntimeError) and `TimeoutException`. Log lines for a failed job name the .NET exception, so their text differs.
+- **`autostart on` runs `claude-headless-background.exe`** (no window) under the same task name, `claude-headless run-queue`, so switching from Python replaces the Python task rather than adding a second. `TaskSchedule` was added to WinBackground's `ScheduledTask` for this (a job every N minutes with a time limit, as win-background's `Task.enable` does); the watcher script is unchanged.
+
+### PyCompat
+
+`Py`, `PyJson` and `PyPath` were first written for ai-keep-awake's port, and are copied here unchanged apart from the namespace. `PyStr` (Python's whitespace, code-point slices, splitlines, text-mode files) and `PyTime` (zoneinfo-style wall-clock arithmetic, isoformat) are new. Each has tests, with expected values printed by Python 3.14.
+
+**A trap worth knowing:** a C# hex escape such as the one for U+001C takes up to four hex digits, so when it's followed by a letter that is also a hex digit it swallows it. Use the four-digit `u` escape in tests.
 
 ## Using it from a tool
 

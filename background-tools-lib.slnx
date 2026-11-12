@@ -1,11 +1,17 @@
 <Solution>
   <Folder Name="/src/">
+    <Project Path="src/ClaudeHeadless.Background/ClaudeHeadless.Background.csproj" />
+    <Project Path="src/ClaudeHeadless.Console/ClaudeHeadless.Console.csproj" />
+    <Project Path="src/ClaudeHeadless/ClaudeHeadless.csproj" />
     <Project Path="src/M365Graph/M365Graph.csproj" />
+    <Project Path="src/PyCompat/PyCompat.csproj" />
     <Project Path="src/WinBackground/WinBackground.csproj" />
   </Folder>
   <Folder Name="/tests/">
+    <Project Path="tests/ClaudeHeadless.Tests/ClaudeHeadless.Tests.csproj" />
     <Project Path="tests/M365Graph.Tests/M365Graph.Tests.csproj" />
     <Project Path="tests/LockHelper/LockHelper.csproj" />
+    <Project Path="tests/PyCompat.Tests/PyCompat.Tests.csproj" />
     <Project Path="tests/WinBackground.Tests/WinBackground.Tests.csproj" />
   </Folder>
 </Solution>

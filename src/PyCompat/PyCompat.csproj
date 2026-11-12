@@ -1,0 +1,8 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!-- The bits of Python's behaviour a port has to reproduce exactly, so its files and output match the Python
+       tool's byte for byte: json.dumps, pathlib, str.strip / splitlines, text-mode files, aware datetimes.
+       First written for ai-keep-awake (Py, PyJson, PyPath); shared from here. Not Windows-specific. -->
+  <ItemGroup>
+    <InternalsVisibleTo Include="PyCompat.Tests" />
+  </ItemGroup>
+</Project>

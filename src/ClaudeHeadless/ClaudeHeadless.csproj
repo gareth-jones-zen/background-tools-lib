@@ -1,0 +1,14 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!-- Running Claude Code headless (claude -p) from background tools, and surviving the usage limit: one queue per
+       seat, shared with the Python claude-headless. Port of claude-headless 0.1.0. -->
+  <PropertyGroup>
+    <TargetFramework>net11.0-windows</TargetFramework>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\WinBackground\WinBackground.csproj" />
+    <ProjectReference Include="..\PyCompat\PyCompat.csproj" />
+  </ItemGroup>
+  <ItemGroup>
+    <InternalsVisibleTo Include="ClaudeHeadless.Tests" />
+  </ItemGroup>
+</Project>
