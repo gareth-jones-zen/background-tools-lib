@@ -1,0 +1,19 @@
+<Project>
+  <!-- Shared by every project. The tools that use these libraries are published with Native AOT, so the
+       libraries are AOT- and trim-checked. Windows-only projects set net11.0-windows themselves. -->
+  <PropertyGroup>
+    <TargetFramework>net11.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <LangVersion>latest</LangVersion>
+    <InvariantGlobalization>true</InvariantGlobalization>
+    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+    <Version>0.1.0-dev</Version>
+    <IncludeSourceRevisionInInformationalVersion>false</IncludeSourceRevisionInInformationalVersion>
+    <Authors>Gareth Jones</Authors>
+    <RepositoryUrl>https://github.com/gareth-jones-zen/background-tools-lib</RepositoryUrl>
+  </PropertyGroup>
+  <PropertyGroup Condition="'$(IsTestProject)' != 'true'">
+    <IsAotCompatible>true</IsAotCompatible>
+  </PropertyGroup>
+</Project>

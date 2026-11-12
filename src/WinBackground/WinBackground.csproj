@@ -1,0 +1,8 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!-- Running a tool quietly in the background on Windows: power requests, Task Scheduler, locks, the log, toasts.
+       Windows only; anything that could run elsewhere belongs in another project. -->
+  <PropertyGroup>
+    <TargetFramework>net11.0-windows</TargetFramework>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+  </PropertyGroup>
+</Project>
