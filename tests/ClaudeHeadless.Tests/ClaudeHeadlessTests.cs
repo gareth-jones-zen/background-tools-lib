@@ -342,6 +342,7 @@ public class CliTests : IDisposable
 
         public bool Disable() => false;
         public bool Stop() => false;
+        public bool Start() => false;
         public IReadOnlyDictionary<string, string>? Status() => new Dictionary<string, string> { ["state"] = "Ready", ["next_run"] = "soon" };
     }
 
