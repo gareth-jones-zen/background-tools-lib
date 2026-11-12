@@ -1,0 +1,10 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!-- A small Microsoft Graph client: one sign-in, a cached token shared with the Python tools, requests that
+       don't hang. Port of m365-graph (Python). Not Windows-specific. -->
+  <ItemGroup>
+    <PackageReference Include="Microsoft.Identity.Client" Version="4.92.0" />
+  </ItemGroup>
+  <ItemGroup>
+    <InternalsVisibleTo Include="M365Graph.Tests" />
+  </ItemGroup>
+</Project>

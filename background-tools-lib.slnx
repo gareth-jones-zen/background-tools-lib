@@ -1,5 +1,6 @@
 <Solution>
   <Folder Name="/src/">
+    <Project Path="src/M365Graph/M365Graph.csproj" />
     <Project Path="src/WinBackground/WinBackground.csproj" />
   </Folder>
   <Folder Name="/tests/">
