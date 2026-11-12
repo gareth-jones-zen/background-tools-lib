@@ -5,6 +5,7 @@
   </Folder>
   <Folder Name="/tests/">
     <Project Path="tests/M365Graph.Tests/M365Graph.Tests.csproj" />
+    <Project Path="tests/LockHelper/LockHelper.csproj" />
     <Project Path="tests/WinBackground.Tests/WinBackground.Tests.csproj" />
   </Folder>
 </Solution>

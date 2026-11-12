@@ -67,16 +67,6 @@ internal static partial class Native
     [return: MarshalAs(UnmanagedType.Bool)]
     internal static partial bool GetExitCodeProcess(nint handle, out uint code);
 
-    [LibraryImport("kernel32.dll", SetLastError = true, StringMarshalling = StringMarshalling.Utf16)]
-    internal static partial nint CreateMutexW(nint attributes, [MarshalAs(UnmanagedType.Bool)] bool initialOwner, string name);
-
-    [LibraryImport("kernel32.dll", SetLastError = true)]
-    internal static partial uint WaitForSingleObject(nint handle, uint milliseconds);
-
-    [LibraryImport("kernel32.dll", SetLastError = true)]
-    [return: MarshalAs(UnmanagedType.Bool)]
-    internal static partial bool ReleaseMutex(nint handle);
-
     [LibraryImport("kernel32.dll")]
     internal static partial nint LocalFree(nint memory);
 

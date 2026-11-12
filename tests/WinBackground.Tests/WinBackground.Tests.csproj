@@ -12,5 +12,7 @@
   </ItemGroup>
   <ItemGroup>
     <ProjectReference Include="..\..\src\WinBackground\WinBackground.csproj" />
+    <!-- The child process for the cross-process lock tests, copied beside the tests. -->
+    <ProjectReference Include="..\LockHelper\LockHelper.csproj" />
   </ItemGroup>
 </Project>

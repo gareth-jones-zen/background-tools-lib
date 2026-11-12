@@ -1,0 +1,13 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!-- A child process for the lock tests (a NamedLock in another process), and the Native AOT check: CI
+       publishes it with AOT, so a warning in NamedLock under AOT fails the build. Not shipped. -->
+  <PropertyGroup>
+    <TargetFramework>net11.0-windows</TargetFramework>
+    <OutputType>Exe</OutputType>
+    <PublishAot>true</PublishAot>
+    <IsPackable>false</IsPackable>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\WinBackground\WinBackground.csproj" />
+  </ItemGroup>
+</Project>

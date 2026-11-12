@@ -1,6 +1,7 @@
 namespace WinBackground.Tests;
 
-/// <summary>New here: the locks, the log, toasts and processes, which ai-keep-awake only tested through its watcher.</summary>
+/// <summary>New here: lock keys, the log, toasts and processes, which ai-keep-awake only tested through its watcher.
+/// The locks themselves are in LockTests.</summary>
 public class SmallPartsTests : IDisposable
 {
     private readonly string folder = Path.Combine(Path.GetTempPath(), "wb-tests-" + Guid.NewGuid().ToString("N"));
@@ -9,33 +10,6 @@ public class SmallPartsTests : IDisposable
     {
         if (Directory.Exists(folder))
             Directory.Delete(folder, recursive: true);
-    }
-
-    [Fact]
-    public void A_single_instance_lock_is_held_once_until_released()
-    {
-        var name = "wb-test-" + Guid.NewGuid().ToString("N");
-        using (var first = Locks.SingleInstance(name))
-        {
-            Assert.NotNull(first);
-            // A mutex is re-entrant on its own thread, so the second try comes from another thread.
-            Assert.False(OnOtherThread(name));
-        }
-        Assert.True(OnOtherThread(name));
-    }
-
-    /// <summary>Whether another thread can take the lock (released again on that thread, as a mutex needs).</summary>
-    private static bool OnOtherThread(string name)
-    {
-        var got = false;
-        var thread = new Thread(() =>
-        {
-            using var held = Locks.SingleInstance(name);
-            got = held is not null;
-        });
-        thread.Start();
-        thread.Join();
-        return got;
     }
 
     [Fact]

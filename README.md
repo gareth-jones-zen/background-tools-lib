@@ -17,7 +17,40 @@ Both libraries are AOT- and trim-checked (`IsAotCompatible`), build with warning
 
 ### WinBackground
 
-Copied from the `dotnet` branch of [ai-keep-awake](https://github.com/gareth-jones-zen/ai-keep-awake), where it was first written as the port of the Python `win-background` package. Same namespace, same behaviour.
+Copied from the `dotnet` branch of [ai-keep-awake](https://github.com/gareth-jones-zen/ai-keep-awake), where it was first written as the port of the Python `win-background` package. Same namespace, same behaviour, apart from `NamedLock` (below).
+
+#### Locks between processes
+
+```csharp
+using WinBackground;
+
+using var watcher = Locks.SingleInstance("my-tool-watch");   // null: another one is running
+if (watcher is null)
+    return;
+
+using var run = new NamedLock("my-tool-run-" + Locks.Key(configPath));
+if (!await run.AcquireAsync(timeoutSeconds: 600, cancellationToken))
+    throw new TimeoutException("Another run didn't finish within 10 minutes.");
+await DoTheRunAsync();   // any number of awaits: release works from whichever thread finishes
+run.Release();
+```
+
+A `NamedLock` is a mutex named `Local\{name}`, the same object the Python `win-background` locks create, so .NET and Python tools exclude each other by name. Windows releases a mutex when the process holding it ends (it's "abandoned"), so a crash never leaves a lock stuck.
+
+**Each held lock has a small thread of its own** (fixed 12 Nov 2026). A Win32 mutex belongs to the thread that took it, and `ReleaseMutex` fails on any other thread. The first version took and released the mutex on the caller's thread, so in async code (acquire, `await`, release) the release ran on another thread, failed without a word, and left the lock held until the process exited whenever another process had the mutex open, such as one waiting for it. Now the lock's own thread takes the mutex, waits, and releases it when asked, so:
+
+- `Acquire`, `AcquireAsync`, `Release` and `Dispose` work from any thread, either side of an `await`;
+- `Acquire(timeoutSeconds)` waits up to that long; 0 tries once, and a negative timeout waits indefinitely. `AcquireAsync` waits without blocking a thread and can be cancelled;
+- releasing twice, or disposing after a release, is safe; a release that Windows refuses throws `InvalidOperationException` rather than passing silently;
+- `Dispose` without `Release` releases it, and stops an acquire in progress (which throws `ObjectDisposedException`);
+- `WasAbandoned` says the last holder ended without releasing it. The lock is still yours;
+- the thread is a background thread, so a lock that's never released (a watcher's single-instance lock) never keeps the process alive, and is freed as abandoned when the process ends.
+
+**Differences from the first version, and from Python:**
+
+- **Not re-entrant.** Two `NamedLock`s with the same name exclude each other inside one process, even on one thread. A bare mutex let the same thread take it twice.
+- **Acquiring twice with one object** throws `InvalidOperationException`, and a disposed object can't be acquired again (`ObjectDisposedException`). The first version overwrote its handle.
+- **A mutex made by a process this one can't open** (an elevated one) counts as held by someone else: `Acquire` returns false, as in Python. Any other failure to open it throws.
 
 ### M365Graph
 
@@ -99,7 +132,7 @@ dotnet test -c Release
 
 `tests/M365Graph.Tests` has one live test against the real Graph, skipped unless `M365GRAPH_LIVE_CACHE` names a token cache file (and `M365GRAPH_LIVE_TENANT` its tenant). It copies the file first and works on the copy, silently only, and reads only `/me`.
 
-Native AOT publishing (for the tools, not these libraries) needs the Visual Studio C++ build tools; from Git Bash, put `C:\Program Files (x86)\Microsoft Visual Studio\Installer` on the `PATH` so the SDK can find them.
+`tests/LockHelper` is a small console used by the lock tests as another process. CI also publishes it with Native AOT, which checks the locks under AOT. Native AOT publishing needs the Visual Studio C++ build tools; from Git Bash, put `C:\Program Files (x86)\Microsoft Visual Studio\Installer` on the `PATH` so the SDK can find them.
 
 ## Licence
 
