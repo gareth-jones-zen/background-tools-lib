@@ -14,6 +14,9 @@ public interface ITask
     /// <summary>Stop the task and wait (up to 30 seconds) for its process to exit. False if there's no task.</summary>
     bool Stop();
 
+    /// <summary>Start the task now, as it is (to undo a Stop when what came after it failed). False if there's no task.</summary>
+    bool Start();
+
     /// <summary>Null if there's no task; otherwise state, command, last_run, last_result and next_run.</summary>
     IReadOnlyDictionary<string, string>? Status();
 }
@@ -80,6 +83,14 @@ public sealed class ScheduledTask(string name, string description = "", IReadOnl
         return $"{exe} {Shell.ListToCommandLine(args)}";
     }
 
+    /// <summary>PowerShell: the processes still running the task, found by its arguments ($taskArgs) in their
+    /// command lines. Never this script's own powershell.exe ($PID): Enable's script contains the arguments
+    /// literally, so without that it always found itself and waited the full 30 seconds. Not narrowed further by
+    /// the program's path either: a launcher (a venv's python, py.exe) can run the real process from another
+    /// exe, and missing a live watcher brings back the race below, while a false match only costs a wait.</summary>
+    public const string AliveFilter =
+        "Get-CimInstance Win32_Process | Where-Object { $_.ProcessId -ne $PID -and $_.CommandLine -and $_.CommandLine.Contains($taskArgs) }";
+
     /// <summary>PowerShell: stop the task, then wait (up to 30 seconds) until its process has actually gone.
     ///
     /// Stop-ScheduledTask returns before the process exits. Starting again at once lost the race on 11 Nov 2026:
@@ -93,7 +104,7 @@ public sealed class ScheduledTask(string name, string description = "", IReadOnl
           Stop-ScheduledTask {{Which}}
           $deadline = (Get-Date).AddSeconds(30)
           while ($taskArgs -and (Get-Date) -lt $deadline) {
-            $alive = Get-CimInstance Win32_Process | Where-Object { $_.CommandLine -and $_.CommandLine.Contains($taskArgs) }
+            $alive = {{AliveFilter}}
             if (-not $alive) { break }
             Start-Sleep -Milliseconds 500
           }
@@ -111,6 +122,20 @@ public sealed class ScheduledTask(string name, string description = "", IReadOnl
         if (done.ExitCode != 0)
             throw new InvalidOperationException($"Couldn't stop the task: {Clip(done)}");
         return done.StandardOutput.Contains("stopped");
+    }
+
+    public bool Start()
+    {
+        var done = Shell.PowerShell($$"""
+
+            $existing = Get-ScheduledTask {{Which}} -ErrorAction SilentlyContinue
+            if ($existing) { Start-ScheduledTask {{Which}}; 'started' }
+            exit 0
+
+            """);
+        if (done.ExitCode != 0)
+            throw new InvalidOperationException($"Couldn't start the task: {Clip(done)}");
+        return done.StandardOutput.Contains("started");
     }
 
     public bool Disable()

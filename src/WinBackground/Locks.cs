@@ -1,3 +1,4 @@
+using System.Runtime.InteropServices;
 using System.Security.Cryptography;
 using System.Text;
 
@@ -305,5 +306,23 @@ public static class Locks
             return lockObject;
         lockObject.Dispose();
         return null;
+    }
+
+    /// <summary>Whether some process (this one included) has the lock open, in practice holds it, without ever
+    /// acquiring it. A probe that acquired it, even for a moment, could make a watcher starting at that moment
+    /// think another was running and exit. The mutex exists only while a process has it open, and a holder keeps
+    /// it open. A NamedLock that is still waiting to acquire has it open too, so this says true then as well.</summary>
+    public static bool Held(string name)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(name);
+        const uint synchronize = 0x00100000;
+        const int accessDenied = 5;
+        var handle = Native.OpenMutexW(synchronize, false, $@"Local\{name}");
+        if (handle != 0)
+        {
+            Native.CloseHandle(handle);
+            return true;
+        }
+        return Marshal.GetLastPInvokeError() == accessDenied;   // there, but someone else's to open
     }
 }

@@ -224,6 +224,40 @@ public class LockTests
         Assert.Equal(0, await RunHelper("async", NewName()));
     }
 
+    [Fact]
+    public void Held_looks_without_taking()
+    {
+        // Brought over from ai-keep-awake, whose status uses it to see whether the watcher is running.
+        var name = NewName();
+        Assert.False(Locks.Held(name));
+        Assert.False(Locks.Held(name));   // looking doesn't create it
+        using (var holder = Locks.SingleInstance(name))
+        {
+            Assert.NotNull(holder);
+            Assert.True(Locks.Held(name));
+            Assert.True(holder.IsHeld);   // still held by its holder, not disturbed by the look
+            Assert.False(OnOtherThread(name));
+        }
+        Assert.False(Locks.Held(name));
+        Assert.True(OnOtherThread(name));
+        Assert.False(Locks.Held(name));
+    }
+
+    [Fact]
+    public async Task Held_sees_a_lock_another_process_holds_until_it_releases_it()
+    {
+        var name = NewName();
+        using var holder = StartHelper("hold", name);
+        Assert.Equal("held", await ReadLine(holder));
+        Assert.True(Locks.Held(name));
+        Assert.False(OnOtherThread(name));   // the look took nothing from it
+        await holder.StandardInput.WriteLineAsync("release");
+        await holder.StandardInput.FlushAsync(Cancel);
+        Assert.Equal("released", await ReadLine(holder));
+        await holder.WaitForExitAsync(Cancel).WaitAsync(Patience, Cancel);
+        Assert.False(Locks.Held(name));
+    }
+
     /// <summary>Await until the continuation runs on a different thread; returns the thread it started on.</summary>
     private static async Task<int> HopThreads()
     {

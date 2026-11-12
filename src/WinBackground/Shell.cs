@@ -36,12 +36,33 @@ public static class Shell
         return new Completed(process.ExitCode, Normalise(output.Result), Normalise(error.Result));
     }
 
+    /// <summary>A program in System32, by its full path. Never start a system program by bare name: Windows
+    /// looks in the running program's own folder and the current folder before System32, and an exe is often run
+    /// from wherever its zip was unzipped (Downloads), so a stray powershell.exe there would run instead.</summary>
+    public static string SystemProgram(params string[] parts) => Path.Combine([Environment.SystemDirectory, .. parts]);
+
+    /// <summary>Windows PowerShell 5.1, which every Windows 10 and 11 machine has.</summary>
+    public static string PowerShellExe => SystemProgram("WindowsPowerShell", "v1.0", "powershell.exe");
+
     /// <summary>A PowerShell script, as `powershell -NoProfile -NonInteractive -Command script`.</summary>
     public static Completed PowerShell(string script, double timeoutSeconds = 120) =>
-        Run("powershell", ["-NoProfile", "-NonInteractive", "-Command", script], TimeSpan.FromSeconds(timeoutSeconds));
+        Run(PowerShellExe, ["-NoProfile", "-NonInteractive", "-Command", script], TimeSpan.FromSeconds(timeoutSeconds));
 
-    /// <summary>A PowerShell single-quoted string.</summary>
-    public static string Quote(string text) => "'" + text.Replace("'", "''") + "'";
+    /// <summary>A PowerShell single-quoted string. PowerShell ends one at any of ' and the curly quotes U+2018 to
+    /// U+201B, and a doubled one stands for itself, so each of those is doubled (as PowerShell's own
+    /// CodeGeneration.EscapeSingleQuotedStringContent does). Doubling only ' let a path such as C:\Users\O’Brien
+    /// end the string early: a syntax error at best, and a way to inject script at worst.</summary>
+    public static string Quote(string text)
+    {
+        var result = new StringBuilder(text.Length + 2).Append('\'');
+        foreach (var c in text)
+        {
+            if (c is '\'' or '\u2018' or '\u2019' or '\u201A' or '\u201B')
+                result.Append(c);
+            result.Append(c);
+        }
+        return result.Append('\'').ToString();
+    }
 
     /// <summary>Arguments joined into one command line by the Microsoft C runtime's rules
     /// (Python's subprocess.list2cmdline), so the task shows exactly what the Python version wrote.</summary>

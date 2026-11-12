@@ -67,6 +67,9 @@ internal static partial class Native
     [return: MarshalAs(UnmanagedType.Bool)]
     internal static partial bool GetExitCodeProcess(nint handle, out uint code);
 
+    [LibraryImport("kernel32.dll", SetLastError = true, StringMarshalling = StringMarshalling.Utf16)]
+    internal static partial nint OpenMutexW(uint access, [MarshalAs(UnmanagedType.Bool)] bool inherit, string name);
+
     [LibraryImport("kernel32.dll")]
     internal static partial nint LocalFree(nint memory);
 

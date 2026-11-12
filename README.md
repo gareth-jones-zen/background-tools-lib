@@ -52,6 +52,17 @@ A `NamedLock` is a mutex named `Local\{name}`, the same object the Python `win-b
 - **Acquiring twice with one object** throws `InvalidOperationException`, and a disposed object can't be acquired again (`ObjectDisposedException`). The first version overwrote its handle.
 - **A mutex made by a process this one can't open** (an elevated one) counts as held by someone else: `Acquire` returns false, as in Python. Any other failure to open it throws.
 
+`Locks.Held(name)` says whether any process (this one included) has the lock, **without ever taking it**, for a `status` command to see whether the watcher is running. A probe that took the lock, even for a moment, could make a watcher starting at that moment think another was running and exit. It also says true while a `NamedLock` is waiting for it, as the waiter has the mutex open.
+
+#### Fixes from ai-keep-awake's review (12 Nov 2026)
+
+Brought over once ai-keep-awake had them, so the two copies are one again:
+
+- **System programs by their full path.** `Shell.PowerShell` runs `Shell.PowerShellExe` (Windows PowerShell 5.1 in System32) and the powercfg fallback runs `Power.PowercfgExe`. Windows looks in the program's own folder and the current folder before System32, and an exe is often run from wherever it was unzipped, so a stray `powershell.exe` there would run instead. `Shell.SystemProgram(...)` gives any other System32 program.
+- **`Shell.Quote` doubles the curly single quotes (U+2018 to U+201B) as well as `'`.** PowerShell ends a single-quoted string at any of them, so a path such as `C:\Users\O’Brien` ended the string early: a syntax error at best, a way to inject script at worst.
+- **Stopping a task no longer waits for its own PowerShell.** The script that registers a task contains the task's arguments, so the wait for the old process found the script itself and always ran the full 30 seconds. `ScheduledTask.AliveFilter` leaves out `$PID`.
+- **`ITask.Start()`** starts the task as it is, to undo a `Stop` when what came after it failed. False if there's no task.
+
 ### M365Graph
 
 A port of the Python library `m365-graph` (0.1.2), with the same capabilities and much the same shape:

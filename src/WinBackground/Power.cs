@@ -176,12 +176,15 @@ public static class Power
         return (Powercfg(subgroup, setting, ac), "powercfg");
     }
 
+    /// <summary>powercfg.exe by its full path (see Shell.SystemProgram).</summary>
+    public static string PowercfgExe => Shell.SystemProgram("powercfg.exe");
+
     /// <summary>The fallback: `powercfg /query`. Its labels are translated, so take the last two hex numbers (AC, DC).</summary>
     private static long? Powercfg(string subgroup, string setting, bool ac)
     {
         try
         {
-            var done = Shell.Run("powercfg", ["/query", "SCHEME_CURRENT", subgroup, setting], TimeSpan.FromSeconds(15));
+            var done = Shell.Run(PowercfgExe, ["/query", "SCHEME_CURRENT", subgroup, setting], TimeSpan.FromSeconds(15));
             return ParsePowercfg(done.StandardOutput, ac);
         }
         catch (Exception error) when (error is TimeoutException or Win32Exception or IOException or InvalidOperationException)
