@@ -11,6 +11,8 @@ using PeopleFirstClient;
 //                                    run with a (hidden) console of its own: launch a headless Edge told to log
 //                                    verbosely to stderr, load a data: page, close it, then read this console's text
 //                                    and write how many characters Edge left there to <result> (0 is right)
+// EdgeHelper launch <profile> visible|hidden
+//                                    launch Edge, open about:blank, close; prints "ok" (exit 0) or "FAILED: ..." (1)
 // EdgeHelper lock-name <path>        print People First's lock name for the profile path
 // EdgeHelper people-first <profile> <url> <account> <out.json>
 //                                    the live read-only check: sign in on the profile (a copy), GET /profile and the
@@ -22,6 +24,7 @@ return args switch
     ["hold", var profile] => await Hold(profile),
     ["lock-name", var path] => LockName(path),
     ["quiet", var profile, var result] => await Quiet(profile, result),
+    ["launch", var profile, var how] => await Launch(profile, how == "visible"),
     ["people-first", var profile, var url, var account, var output] => await PeopleFirst(profile, url, account, output),
     _ => Usage(),
 };
@@ -30,6 +33,22 @@ static int Usage()
 {
     Console.Error.WriteLine("usage: EdgeHelper smoke|hold <profile> | lock-name <path> | people-first <profile> <url> <account> <out.json>");
     return 2;
+}
+
+static async Task<int> Launch(string profile, bool visible)
+{
+    try
+    {
+        await using var browser = await EdgeBrowser.LaunchAsync(new EdgeLaunchOptions { UserDataDir = profile, Headless = !visible });
+        await browser.NewPageAsync("about:blank");
+        Console.WriteLine("ok");
+        return 0;
+    }
+    catch (EdgeLaunchException e)
+    {
+        Console.WriteLine("FAILED: " + e.Message);
+        return 1;
+    }
 }
 
 static async Task<int> Quiet(string profile, string result)

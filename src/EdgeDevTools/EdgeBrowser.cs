@@ -90,10 +90,16 @@ public sealed record EdgeRequest(string RequestId, string Url, IReadOnlyDictiona
 public sealed class EdgeBrowser : IAsyncDisposable
 {
     /// <summary>The switches every launch gets: a quiet Edge with no first-run pages, sync, extensions or
-    /// background updates. Proven with People First's sign-in on 12 Nov 2026.</summary>
+    /// background updates. Proven with People First's sign-in on 12 Nov 2026.
+    /// <para><c>--edge-skip-compat-layer-relaunch</c> (13 Nov 2026): when the environment carries a Windows
+    /// compatibility layer (<c>__COMPAT_LAYER</c>, which Windows can set on a program double-clicked in Explorer),
+    /// Edge relaunches itself without it, and the first process, the one holding the DevTools pipe, exits at once:
+    /// "The DevTools connection to Edge has closed" within 200 ms, hidden or visible. Playwright passes the same
+    /// switch for the same reason. A double-clicked tool hit this on its first runs.</para></summary>
     public static readonly IReadOnlyList<string> StandardArguments =
     [
         "--remote-debugging-pipe",
+        "--edge-skip-compat-layer-relaunch",
         "--no-first-run",
         "--no-default-browser-check",
         "--disable-extensions",

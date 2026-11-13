@@ -21,6 +21,42 @@ public class LiveEdgeTests
         }
     }
 
+    [Theory]
+    [InlineData("hidden", "")]
+    [InlineData("visible", "")]
+    [InlineData("hidden", "RunAsInvoker")]
+    [InlineData("visible", "RunAsInvoker")]
+    [InlineData("visible", "HighDpiAware")]
+    public async Task Edge_starts_hidden_or_visible_even_under_a_compatibility_layer(string how, string layer)
+    {
+        // Regression, 13 Nov 2026: with __COMPAT_LAYER in the environment (Windows can set it on a program
+        // double-clicked in Explorer), Edge relaunched itself without it and the process holding the pipe exited:
+        // "The DevTools connection to Edge has closed" within 200 ms. The visible cases open a window briefly.
+        RequireEdge();
+        var profile = Directory.CreateTempSubdirectory("edge-devtools-test-").FullName;
+        try
+        {
+            var helper = Path.Combine(AppContext.BaseDirectory, "EdgeHelper.exe");
+            var start = new ProcessStartInfo(helper, ["launch", profile, how])
+            {
+                RedirectStandardOutput = true,
+                UseShellExecute = false,
+                CreateNoWindow = true,
+            };
+            if (layer.Length > 0)
+                start.Environment["__COMPAT_LAYER"] = layer;
+            using var child = Process.Start(start)!;
+            var output = await child.StandardOutput.ReadToEndAsync(Cancel).WaitAsync(TimeSpan.FromSeconds(90), Cancel);
+            await child.WaitForExitAsync(Cancel);
+            Assert.Equal("ok", output.Trim());
+            Assert.Equal(0, child.ExitCode);
+        }
+        finally
+        {
+            DeleteQuietly(profile);
+        }
+    }
+
     [Fact]
     public async Task Edge_starts_runs_script_and_closes_cleanly_releasing_its_profile()
     {
