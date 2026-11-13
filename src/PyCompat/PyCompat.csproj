@@ -9,4 +9,8 @@
   <ItemGroup>
     <InternalsVisibleTo Include="PyCompat.Tests" />
   </ItemGroup>
+  <ItemGroup>
+    <!-- PyToml: settings files read as tomllib reads them. The same version every tool uses. -->
+    <PackageReference Include="Tomlyn" Version="2.11.1" />
+  </ItemGroup>
 </Project>
