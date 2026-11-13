@@ -11,7 +11,7 @@ Shared .NET libraries for a set of small personal background tools on Windows: w
 | `src/WinBackground` | Running quietly in the background on Windows: power requests (keeping the machine awake), Task Scheduler tasks, single-instance locks between processes, a log that never throws, toast notifications, child processes without a console window flashing up | Windows only (`net11.0-windows`) |
 | `src/M365Graph` | A small Microsoft Graph client: one sign-in per process, a token cache shared with the Python tools, requests with a timeout and retries, paging, and IPv4 first | Any (`net11.0`) |
 | `src/ClaudeHeadless` | Running Claude Code headless (`claude -p`) from background tools, and surviving the usage limit: one job queue per seat, shared with the Python claude-headless. Also `claude-headless.exe` and its windowless twin | Windows only (`net11.0-windows`) |
-| `src/PyCompat` | The bits of Python's behaviour a port has to reproduce exactly, so its files and output match the Python tool's byte for byte | Any (`net11.0`) |
+| `src/PyCompat` | The bits of Python's behaviour a port has to reproduce exactly, so its files and output match the Python tool's byte for byte: `str` methods, `json.dumps`, `pathlib`, `datetime`, `re`, `html` and `difflib` | Any (`net11.0`) |
 | `src/EdgeDevTools` | The installed Microsoft Edge driven over the DevTools protocol through a pipe, with no Playwright or Node: launch on a profile, pages, script, clicks, request headers, a clean close, and Edge ending with the process that started it. Also the Edge profile's lock key (the same as the Python tools') and Microsoft sign-in page recognition | Windows only (`net11.0-windows`) |
 | `src/PeopleFirstClient` | People First (MHR's HR system) read as you through its web app's own single sign-on: a hidden Edge takes the token, then HttpClient reads the API. GET only. A port of `people-first-client` | Windows only (`net11.0-windows`) |
 
@@ -67,6 +67,25 @@ Brought over once ai-keep-awake had them, so the two copies are one again:
 - **Stopping a task no longer waits for its own PowerShell.** The script that registers a task contains the task's arguments, so the wait for the old process found the script itself and always ran the full 30 seconds. `ScheduledTask.AliveFilter` leaves out `$PID`.
 - **`ITask.Start()`** starts the task as it is, to undo a `Stop` when what came after it failed. False if there's no task.
 
+#### Added for the tools' ports (13 Nov 2026)
+
+What teams-channel-notes', mail-triage's and onenote-sync's ports had each written for themselves:
+
+```csharp
+// subprocess.run(args, input=payload, cwd=folder, capture_output=True, text=True, encoding="utf-8", errors="replace")
+var done = Shell.Run(hook[0], hook[1..], TimeSpan.FromSeconds(60), stdin: payload, workingDirectory: folder, utf8: true);
+
+Console.SetOut(ConsoleText.Out);          // Unicode to a console, UTF-8 when redirected, as Python's
+using var run = Locks.Exclusive(name, 600, "triage run");   // win_background's exclusive()
+```
+
+- **`Shell.Run`'s optional `stdin`, `workingDirectory` and `utf8`.** stdin is written in text mode (each LF as CRLF) and then closed, and a program that exits without reading it is no error. With `utf8`, stdin, stdout and stderr are UTF-8 with no byte order mark, bad bytes are read as U+FFFD, and the output has universal newlines. **Without them, nothing changes:** stdin is closed at once, output is in the console's code page, and only CRLF becomes LF.
+- **A timeout throws `ShellTimeoutException`** (a `TimeoutException`, so existing catches still work), after killing the program and everything it started. Its message is the library's own; `PythonMessage` is Python's `TimeoutExpired` text (`Command '[...]' timed out after 60 seconds`), for a log that has to match. `Shell.WinErrorText(Win32Exception)` gives an `OSError`'s (`[WinError 2] The system cannot find the file specified`).
+- **`ConsoleText.Out` and `.Error`**: `WriteConsoleW` to a console, so an emoji shows rather than `?`, and UTF-8 with no byte order mark when redirected. .NET's own `Console.Out` uses the console's code page for both.
+- **`Locks.Exclusive(name, timeoutSeconds, what)`** returns the `NamedLock` held, or throws `TimeoutException` with Python's words: "Another {what} didn't finish within {minutes} minutes." (minutes rounded half to even, as `{:.0f}` does). `Locks.SingleInstance` is `single_instance()`.
+- **`Logger` writes a newline inside a message as CRLF,** as Python's text mode did: a multi-line message (a diff, a hook's output) has each LF written as CRLF in the file, and as the echo writer's own `NewLine`. **Before 13 Nov 2026 an LF inside a message was written as it was.** A caller that converted LF to CRLF itself (onenote-sync's port) must stop, or it gets CR CR LF.
+- **Not changed, worth knowing:** `Locks.Key` lower-cases with .NET's invariant lower case, while Python's `key()` uses `str.lower()`. They differ only for U+0130 and a final capital sigma in a path; `EdgeProfile.Key` uses Python's (`PyStr.Lower`). WinBackground doesn't reference PyCompat, so this was left as it is.
+
 ### M365Graph
 
 A port of the Python library `m365-graph` (0.1.2), with the same capabilities and much the same shape:
@@ -93,6 +112,25 @@ await foreach (var message in graph.PagesAsync("/me/messages?$top=50", ["Mail.Re
 - **A 60-second timeout and three tries** for 429, 500, 502, 503, 504 and dropped connections (honouring `Retry-After`, otherwise 5 s then 10 s). The silent sign-in refresh is retried the same way on a dropped connection.
 - **IPv4 first**, through `SocketsHttpHandler.ConnectCallback`, for Graph calls and MSAL's sign-in calls alike. login.microsoftonline.com lists its IPv6 addresses first, and on a network where IPv6 to Microsoft goes nowhere, trying them in order stalled sign-ins for minutes.
 - **Typed replies through source generation**: `GetAsync(url, MyJsonContext.Default.MyType)`, as well as `JsonObject` replies. No Graph SDK.
+
+#### A fake handler for tests, raw requests, and connect failures (13 Nov 2026)
+
+```csharp
+// A tool's adapter test: every request through a fake handler, a token with no MSAL, waits recorded.
+var graph = new GraphClient(options, fakeHandler, token: (scopes, _) => Task.FromResult("t"),
+    delay: (wait, _) => { waits.Add(wait); return Task.CompletedTask; }, clock: () => now);
+
+// Bytes in, bytes out: the Content-Type exactly as given, the reply as served, the status returned.
+var page = await graph.SendRawAsync(HttpMethod.Get, $"/me/onenote/pages/{id}/content");
+var reply = await graph.SendRawAsync(HttpMethod.Patch, url, body, "application/json", GraphRetryPolicy.Write with { Tries = 5 });
+if (!reply.IsSuccess) ...   // reply.Status, reply.Body
+```
+
+- **`new GraphClient(options, handler, token?, delay?, clock?)`** sends every request through the handler. With `token`, MSAL is never used (it's given the scopes asked for and returns a token); without it, the sign-in is the usual one through the cache file, with MSAL's calls through the handler too, and isn't shared with other clients. `clock` is "now" for a `Retry-After` date.
+- **`SendRawAsync(method, url, body, contentType, policy, scopes, headers)`** sends the body's bytes with the `Content-Type` exactly as given (no `; charset=utf-8`, which `StringContent` adds), and returns `GraphRawResponse(Status, Body, ContentType)` whatever the status. The default client for raw calls asks for no compression, so the bytes arrive as served (Python's urllib didn't ask either).
+- **`GraphRetryPolicy(Tries, Statuses, ResendAfterDelivery)`** per call. `Read`: 429 and 5xx retried, and a dropped connection. `Write`: only a 429, or a request that never connected, is sent again; a timeout or a dropped connection after sending throws `GraphDeliveryUnknownException`, because a retried insert or create could be applied twice. Both default to `Graph.Retries` (3) tries; `with { Tries = 5 }` for more. Retries are logged through `Options.Log`, as other calls' are.
+- **Connect failures say so by type.** The IPv4-first connect throws `HttpRequestException` with `HttpRequestError.NameResolutionError` or `ConnectionError` (SocketsHttpHandler wraps it in its own `ConnectionError`), and **`Net.NeverSent(error)`** reads the chain: true when the request certainly never reached the server, so it's safe to resend a write. No message matching.
+- `Net.CreateHandler(decompress: false)` gives the IPv4-first handler without compression.
 
 #### Sharing the token cache with the Python tools
 
@@ -158,7 +196,22 @@ claude-headless autostart on  # run the queue every 15 minutes and at logon (cla
 
 ### PyCompat
 
-`Py`, `PyJson` and `PyPath` were first written for ai-keep-awake's port, and are copied here unchanged apart from the namespace. `PyStr` (Python's whitespace, code-point slices, splitlines, text-mode files) and `PyTime` (zoneinfo-style wall-clock arithmetic, isoformat) are new. Each has tests, with expected values printed by Python 3.14.
+One set of Python-compatibility helpers, merged on 13 Nov 2026 from the ports' own copies (ai-keep-awake, claude-headless, mail-triage, onenote-sync, teams-channel-notes, and EdgeDevTools' `str.lower()`). Where two ports had written the same thing differently, the more complete one was kept and both ports' tests run against it.
+
+| Class | Python | What's in it |
+|---|---|---|
+| `PyStr` | `str` | `IsSpace` (U+001C to U+001F included; checked against every BMP character), `Strip`/`LStrip`/`RStrip` (and with chars), `Split`, `Collapse`, `SplitLines` (and keep-ends), `Length`/`Head`/`Tail` by code point, `IsDigit`, `Int` (any script's digits, sign, underscores), `Lower` (U+0130 and the final-sigma rule), `ExpandTabs`, `CompareCodePoints`/`Order`, text-mode files (`ReadText`, `WriteText`, newlines), `SpaceClass` for a regex class |
+| `Py` | values | Truthiness and `int`/`float`/`str` of JSON values, `repr` of a float or a string, `{:.Nf}` and `{:g}`, `From` (a slice from a negative start) |
+| `PyJson` | `json` | `Parse` (a duplicate key as a dict keeps it), `Dump(node, indent, ensureAscii, sortKeys)` byte for byte in every mode, `Quote` for one string, Python's `==` |
+| `PyPath` | `pathlib`, `ntpath` | `Pure`, `IsAbsolute`, `Home`, `ExpandUser`, `ExpandVars` (`%VAR%`, `$VAR`, `${VAR}`), `Resolve` (links followed and the case corrected, through the final path, as `Path.resolve()` does), `ResolveAgainst`, `Absolute` (by the text alone), `Same` |
+| `PyTime` | `datetime`, `zoneinfo` | `Zone` (IANA or Windows names), `At`/`Offset` (a wall time with fold=0), `Local`, `Now`, `AddWall`, `Iso` and `IsoFormat` in every timespec, `FromIso`/`FromIsoFormat`/`TimeFromIso` (an exact port of CPython's `fromisoformat`, every form 3.14 accepts, "24:00" included), `Strftime` (a checked subset, C locale), `Weekday`, `Micro`, `TimeMax` |
+| `PyRegex` | `re` | Python's patterns translated for .NET (`\w`, `\b`, `\s` as Python's, `\Z`, leading flags, Python's extra case folds for i and s) and a guard that refuses what the two read differently; `Search`, `MatchStart`, `FullMatch`, `FindAll`, `Sub`, `Split`, `Escape`; a time limit per match. First written for mail-triage |
+| `PyHtml` | `html` | `Unescape` exactly (all 2,231 HTML5 names, longest prefix, the numeric-reference rules), `Escape(text, quote)`, `IsEntity` |
+| `UnifiedDiff` | `difflib` | `unified_diff` line for line, including SequenceMatcher's popular-lines rule: `Of` (lines with endings) and `Lines` (`lineterm=""`) |
+
+**Deliberate behaviour changes for callers of the 12 Nov version:** `PyPath.Resolve` now follows links and corrects case (the old text-only behaviour is `PyPath.Absolute`), and so does `ResolveAgainst`; `PyTime.Zone("UTC")` is `TimeZoneInfo.Utc`; `FromIsoFormat` accepts every form Python does and keeps microseconds only, as Python does (it took up to seven fraction digits before).
+
+**Checked against Python itself.** `tools/gen/gen_tables.py` writes the HTML5 entity table and the whitespace table from Python's own data; `tools/gen/gen_expected.py` writes the expected values for `fromisoformat`, `time.fromisoformat`, `unified_diff`, `json.dumps` in four modes, `html.unescape`, `str.lower` and `int` (`tests/PyCompat.Tests/Generated`). Each carries the Python version it came from (3.14.5, what the Python tools run); re-run both after a Python upgrade and diff.
 
 **A trap worth knowing:** a C# hex escape such as the one for U+001C takes up to four hex digits, so when it's followed by a letter that is also a hex digit it swallows it. Use the four-digit `u` escape in tests.
 ### EdgeDevTools
@@ -181,7 +234,7 @@ if (await edge.FindTextAsync(page, "Sign in", exact: true) is { } at)
 - **Every page, frame and worker is attached from its first request** (`Target.setAutoAttach` with each one paused until its network events are on), so a sign-in pop-up or a redirect through another site can't slip past. `RequestSent` merges `requestWillBeSent` with its extra-info event, which carries the headers the page's own list leaves out.
 - **No reflection:** messages are written with `Utf8JsonWriter` and read with `JsonDocument`.
 - **It only reads and clicks.** Nothing in it reads or changes cookies or storage, or types into a page.
-- **`EdgeProfile`**: `Key(path)` is the 16-character key win-background (Python) gives the same profile, byte for byte: it spells the path as `str(pathlib.Path(os.path.abspath(p)))` does and lower-cases as Python's `str.lower()` does (which differs from .NET's for U+0130 and a final capital sigma). So a .NET and a Python tool sharing a profile lock the same mutex. `IsOpen(path)` says whether an Edge has the profile open (Edge holds `lockfile` in it, shared for reading only, and deletes it on close); `LaunchAsync` checks it rather than handing a second Edge to the first.
+- **`EdgeProfile`**: `Key(path)` is the 16-character key win-background (Python) gives the same profile, byte for byte: it spells the path as `str(pathlib.Path(os.path.abspath(p)))` does and lower-cases as Python's `str.lower()` does (`PyStr.Lower`, which differs from .NET's for U+0130 and a final capital sigma). So a .NET and a Python tool sharing a profile lock the same mutex. `IsOpen(path)` says whether an Edge has the profile open (Edge holds `lockfile` in it, shared for reading only, and deletes it on close); `LaunchAsync` checks it rather than handing a second Edge to the first.
 - **`MicrosoftSignIn`**: one probe script per tab reports what's showing (the address, a button, an account tile, password, email, code and approval prompts, Windows Hello), and `Classify` decides, in C# where it's tested without a browser, whether it's the account picker (which needs no one) or something that needs a person.
 
 It lives apart from `WinBackground` because it's about Edge, and so `EdgeProfile` sits with it: a future Playwright-based project can reference this small project for the profile key.
@@ -243,7 +296,9 @@ dotnet test -c Release
 
 `tests/M365Graph.Tests` has one live test against the real Graph, skipped unless `M365GRAPH_LIVE_CACHE` names a token cache file (and `M365GRAPH_LIVE_TENANT` its tenant). It copies the file first and works on the copy, silently only, and reads only `/me`.
 
-`tests/LockHelper` is a small console used by the lock tests as another process. CI also publishes it with Native AOT, which checks the locks under AOT.
+`tests/LockHelper` is a small console used by the lock and `Shell.Run` tests as another process. CI also publishes it with Native AOT and runs `async` (the locks) and `aot-smoke` (the PyCompat, WinBackground and M365Graph additions of 13 Nov 2026, with a fake Graph handler and no network) under AOT.
+
+`tests/PyCompat.Tests/MergedTests.cs` holds the ports' tests for the merged helpers and the checks against the Python-generated tables; one compares `PyPath.Resolve` with `pathlib` and is skipped where `python` isn't on the `PATH`.
 
 `tests/EdgeHelper` is the same for Edge: the child process for the "Edge dies with the process that started it" test, and the Native AOT check of `EdgeDevTools` and `PeopleFirstClient`, which CI publishes and runs against Edge on a throwaway profile (`smoke`: a `data:` page only, no network). Its `people-first` command is the live read-only comparison with Python; it prints only names, statuses and counts.
 
