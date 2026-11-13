@@ -141,11 +141,51 @@ public static class PyStr
         return negative ? -value : value;
     }
 
-    /// <summary>str.lower(): .NET's invariant lower case (which maps characters beyond U+FFFF too), plus Python's
-    /// full mapping of U+0130 (capital I with dot) to "i" and a combining dot. Python's final-sigma rule isn't
-    /// ported: a capital sigma always becomes U+03C3.</summary>
-    public static string Lower(string text) =>
-        (text.Contains('\u0130') ? text.Replace("\u0130", "i\u0307") : text).ToLowerInvariant();
+    /// <summary>str.lower(): Unicode's lower case, with Python's full mapping of U+0130 (capital I with dot, to "i"
+    /// and a combining dot) and its final-sigma rule. Everything else maps code point by code point, as .NET's
+    /// invariant lower case does (characters beyond U+FFFF included). Moved here from EdgeDevTools' EdgeProfile
+    /// (PythonLower) on 13 Nov 2026.</summary>
+    public static string Lower(string text)
+    {
+        ArgumentNullException.ThrowIfNull(text);
+        var result = new StringBuilder(text.Length);
+        var runes = text.EnumerateRunes().ToArray();
+        for (var i = 0; i < runes.Length; i++)
+        {
+            var rune = runes[i];
+            if (rune.Value == 0x0130)
+                result.Append("i̇");
+            else if (rune.Value == 0x03A3)
+                result.Append(FinalSigma(runes, i) ? 'ς' : 'σ');
+            else
+                result.Append(Rune.ToLowerInvariant(rune).ToString());
+        }
+        return result.ToString();
+    }
+
+    // Python's handle_capital_sigma: a final sigma if a cased letter comes before (skipping case-ignorable
+    // characters) and none comes after.
+    private static bool FinalSigma(Rune[] runes, int at)
+    {
+        var j = at - 1;
+        while (j >= 0 && CaseIgnorable(runes[j]))
+            j--;
+        if (j < 0 || !Cased(runes[j]))
+            return false;
+        j = at + 1;
+        while (j < runes.Length && CaseIgnorable(runes[j]))
+            j++;
+        return j == runes.Length || !Cased(runes[j]);
+    }
+
+    private static bool Cased(Rune rune) =>
+        Rune.IsUpper(rune) || Rune.IsLower(rune) || Rune.GetUnicodeCategory(rune) == UnicodeCategory.TitlecaseLetter;
+
+    private static bool CaseIgnorable(Rune rune) =>
+        Rune.GetUnicodeCategory(rune) is UnicodeCategory.NonSpacingMark or UnicodeCategory.EnclosingMark
+            or UnicodeCategory.Format or UnicodeCategory.ModifierLetter or UnicodeCategory.ModifierSymbol
+        || rune.Value is '\'' or '.' or ':' or 0x00B7 or 0x0387 or 0x05F4 or 0x2018 or 0x2019 or 0x2024 or 0x2027
+            or 0xFE13 or 0xFE52 or 0xFE55 or 0xFF07 or 0xFF0E or 0xFF1A;
 
     /// <summary>str.expandtabs(tabsize): a tab moves to the next multiple of tabsize; "\n" and "\r" start a new
     /// column. Columns count code points, as Python's do.</summary>

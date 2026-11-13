@@ -7,6 +7,9 @@
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
   </PropertyGroup>
   <ItemGroup>
+    <ProjectReference Include="..\PyCompat\PyCompat.csproj" />
+  </ItemGroup>
+  <ItemGroup>
     <InternalsVisibleTo Include="EdgeDevTools.Tests" />
     <InternalsVisibleTo Include="PeopleFirstClient.Tests" />
   </ItemGroup>

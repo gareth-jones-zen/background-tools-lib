@@ -51,7 +51,7 @@ public class EdgeProfileTests
     [InlineData("A\u03a3.", "a\u03c2.")]              // '.' is case-ignorable
     [InlineData("\u1e9e", "\u00df")]
     public void PythonLower_matches_str_lower(string text, string expected) =>
-        Assert.Equal(expected, EdgeProfile.PythonLower(text));
+        Assert.Equal(expected, PyCompat.PyStr.Lower(text));
 
     [Fact]
     public void A_missing_or_stale_lock_file_is_not_open()

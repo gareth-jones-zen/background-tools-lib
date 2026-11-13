@@ -106,11 +106,7 @@ public class PythonOracleTests
     public void Lower_matches_python()
     {
         foreach (var (input, expected) in PythonExpected.Lower)
-        {
-            if (input.Contains('\u03a3'))
-                continue;   // Python's final-sigma rule isn't ported (documented)
             Assert.True(expected == PyStr.Lower(input), input);
-        }
     }
 
     [Fact]
