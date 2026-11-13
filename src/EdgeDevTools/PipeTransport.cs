@@ -56,15 +56,43 @@ public sealed unsafe class PipeTransport : ICdpTransport
 
     public int ProcessId { get; }
 
+    /// <summary>The STARTUPINFO for a launch: the CRT's inherited fds (the pipe on 3 and 4) in lpReserved2, and
+    /// standard input, output and error all <b>the NUL device</b> (STARTF_USESTDHANDLES).
+    /// <para>Why (13 Nov 2026): Edge's own logging ("ERROR:...sitelist_downloader.cc... Sitelist download failed",
+    /// from a company IE-mode policy) appeared in a double-clicked tool's console, and read to its user as the tool
+    /// failing. Edge is a GUI program: it writes to the standard handles it inherits, and if it has none it attaches
+    /// to its parent's console (Chromium's RouteStdioToConsole), so null handles don't help; NUL handles do.</para></summary>
+    internal static Native.STARTUPINFOW Startup(int reservedSize, nint reserved, nint nul) => new()
+    {
+        cb = (uint)sizeof(Native.STARTUPINFOW),
+        cbReserved2 = (ushort)reservedSize,
+        lpReserved2 = reserved,
+        dwFlags = Native.STARTF_USESTDHANDLES,
+        hStdInput = nul,
+        hStdOutput = nul,
+        hStdError = nul,
+    };
+
+    /// <summary>An inheritable handle to the NUL device, read and write.</summary>
+    internal static nint OpenNul()
+    {
+        var inherit = new Native.SECURITY_ATTRIBUTES { nLength = (uint)sizeof(Native.SECURITY_ATTRIBUTES), bInheritHandle = 1 };
+        const uint read = 0x80000000, write = 0x40000000, shareBoth = 3, openExisting = 3;
+        var handle = Native.CreateFileW("NUL", read | write, shareBoth, ref inherit, openExisting, 0, 0);
+        Check(handle != -1 && handle != 0, "CreateFile(NUL)");
+        return handle;
+    }
+
     /// <summary>Start the program with the DevTools pipe on fds 3 and 4, in a job that dies with this process. The
-    /// arguments should include <c>--remote-debugging-pipe</c>.</summary>
+    /// arguments should include <c>--remote-debugging-pipe</c>. Its standard input, output and error are
+    /// the NUL device, so nothing it prints reaches this process's console or output.</summary>
     public static PipeTransport Launch(string executable, IEnumerable<string> arguments, bool showWindow = false)
     {
         ArgumentException.ThrowIfNullOrEmpty(executable);
         var security = new Native.SECURITY_ATTRIBUTES { nLength = (uint)sizeof(Native.SECURITY_ATTRIBUTES), bInheritHandle = 1 };
         // fd 3: Edge reads, we write. fd 4: Edge writes, we read. Only Edge's ends are inherited.
         Check(Native.CreatePipe(out var edgeRead, out var ourWrite, ref security, 0), "CreatePipe");
-        nint ourRead = 0, edgeWrite = 0, jobHandle = 0;
+        nint ourRead = 0, edgeWrite = 0, jobHandle = 0, nul = 0;
         var pi = default(Native.PROCESS_INFORMATION);
         var started = false;
         try
@@ -94,12 +122,8 @@ public sealed unsafe class PipeTransport : ICdpTransport
             }
 
             var line = (CommandLine(executable, arguments) + "\0").ToCharArray();
-            var startup = new Native.STARTUPINFOW
-            {
-                cb = (uint)sizeof(Native.STARTUPINFOW),
-                cbReserved2 = (ushort)size,
-                lpReserved2 = (nint)reserved,
-            };
+            nul = OpenNul();
+            var startup = Startup(size, (nint)reserved, nul);
             // Suspended, so Edge is in the job before it can start anything of its own.
             var creation = Native.CREATE_SUSPENDED | (showWindow ? 0 : Native.CREATE_NO_WINDOW);
             fixed (char* command = line)
@@ -130,6 +154,8 @@ public sealed unsafe class PipeTransport : ICdpTransport
             Native.CloseHandle(edgeRead);
             if (edgeWrite != 0)
                 Native.CloseHandle(edgeWrite);
+            if (nul != 0)
+                Native.CloseHandle(nul);
             if (started)
                 Native.CloseHandle(pi.hThread);
         }

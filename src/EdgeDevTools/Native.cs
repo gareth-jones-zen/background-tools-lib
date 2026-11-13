@@ -7,6 +7,7 @@ internal static unsafe partial class Native
 {
     internal const uint CREATE_SUSPENDED = 0x00000004;
     internal const uint CREATE_NO_WINDOW = 0x08000000;
+    internal const uint STARTF_USESTDHANDLES = 0x00000100;
     internal const uint HANDLE_FLAG_INHERIT = 1;
     internal const byte FOPEN = 0x01;
     internal const byte FPIPE = 0x08;
@@ -70,6 +71,10 @@ internal static unsafe partial class Native
         public nuint PeakProcessMemoryUsed;
         public nuint PeakJobMemoryUsed;
     }
+
+    [LibraryImport("kernel32.dll", SetLastError = true, StringMarshalling = StringMarshalling.Utf16)]
+    internal static partial nint CreateFileW(string name, uint access, uint share, ref SECURITY_ATTRIBUTES security,
+        uint disposition, uint flags, nint template);
 
     [LibraryImport("kernel32.dll", SetLastError = true)]
     [return: MarshalAs(UnmanagedType.Bool)]

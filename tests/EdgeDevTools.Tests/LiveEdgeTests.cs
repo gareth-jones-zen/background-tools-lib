@@ -91,6 +91,46 @@ public class LiveEdgeTests
         }
     }
 
+    [Fact]
+    public async Task What_Edge_prints_never_reaches_our_console()
+    {
+        // Regression, 13 Nov 2026: Edge's own logging (a company policy's "Sitelist download failed") appeared in a
+        // double-clicked tool's console. Edge is a GUI program: it writes to the standard handles it inherits, and
+        // with none it attaches to its parent's console. The helper runs with a hidden console of its own, launches
+        // Edge told to log verbosely to stderr, then counts the characters left in that console.
+        RequireEdge();
+        var profile = Directory.CreateTempSubdirectory("edge-devtools-test-").FullName;
+        var result = Path.Combine(profile, "..", Path.GetFileName(profile) + ".result");
+        try
+        {
+            var helper = Path.Combine(AppContext.BaseDirectory, "EdgeHelper.exe");
+            using var parent = Process.Start(new ProcessStartInfo(helper, ["quiet", profile, result])
+            {
+                UseShellExecute = false,
+                CreateNoWindow = true,
+            })!;
+            await parent.WaitForExitAsync(Cancel).WaitAsync(TimeSpan.FromSeconds(90), Cancel);
+            Assert.Equal(0, parent.ExitCode);
+            Assert.Equal("0", File.ReadAllText(result));
+        }
+        finally
+        {
+            DeleteQuietly(profile);
+            File.Delete(result);
+        }
+    }
+
+    [Fact]
+    public void The_launch_gives_the_program_NUL_for_its_standard_handles()
+    {
+        var startup = PipeTransport.Startup(29, 1234, 77);
+        Assert.Equal(Native.STARTF_USESTDHANDLES, startup.dwFlags & Native.STARTF_USESTDHANDLES);
+        Assert.Equal(77, startup.hStdInput);
+        Assert.Equal(77, startup.hStdOutput);
+        Assert.Equal(77, startup.hStdError);
+        Assert.Equal(1234, startup.lpReserved2);
+    }
+
     private static bool Exited(int pid, TimeSpan wait)
     {
         try

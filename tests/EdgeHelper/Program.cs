@@ -7,6 +7,10 @@ using PeopleFirstClient;
 // EdgeHelper smoke <profile>         launch a headless Edge on a throwaway profile, check pages, script, the probe and
 //                                    the close; prints "ok" lines, exits 0 (no network: a data: page only)
 // EdgeHelper hold <profile>          launch a headless Edge, print "edge <pid>", then wait on stdin (a test kills us)
+// EdgeHelper quiet <profile> <result>
+//                                    run with a (hidden) console of its own: launch a headless Edge told to log
+//                                    verbosely to stderr, load a data: page, close it, then read this console's text
+//                                    and write how many characters Edge left there to <result> (0 is right)
 // EdgeHelper lock-name <path>        print People First's lock name for the profile path
 // EdgeHelper people-first <profile> <url> <account> <out.json>
 //                                    the live read-only check: sign in on the profile (a copy), GET /profile and the
@@ -17,6 +21,7 @@ return args switch
     ["smoke", var profile] => await Smoke(profile),
     ["hold", var profile] => await Hold(profile),
     ["lock-name", var path] => LockName(path),
+    ["quiet", var profile, var result] => await Quiet(profile, result),
     ["people-first", var profile, var url, var account, var output] => await PeopleFirst(profile, url, account, output),
     _ => Usage(),
 };
@@ -25,6 +30,22 @@ static int Usage()
 {
     Console.Error.WriteLine("usage: EdgeHelper smoke|hold <profile> | lock-name <path> | people-first <profile> <url> <account> <out.json>");
     return 2;
+}
+
+static async Task<int> Quiet(string profile, string result)
+{
+    await using (var browser = await EdgeBrowser.LaunchAsync(new EdgeLaunchOptions
+    {
+        UserDataDir = profile,
+        ExtraArguments = ["--enable-logging=stderr", "--v=1"],
+    }))
+    {
+        await browser.NewPageAsync("data:text/html,<title>quiet</title>");
+        await Task.Delay(1500);
+    }
+    await Task.Delay(500);
+    File.WriteAllText(result, ConsoleText.Read().Trim().Length.ToString(System.Globalization.CultureInfo.InvariantCulture));
+    return 0;
 }
 
 static int LockName(string path)
@@ -168,4 +189,48 @@ static int Fail(string why)
 {
     Console.WriteLine("FAILED: " + why);
     return 1;
+}
+
+/// <summary>The text in this process's console window, whoever wrote it.</summary>
+internal static partial class ConsoleText
+{
+    public static unsafe string Read()
+    {
+        var output = CreateFileW("CONOUT$", 0xC0000000, 3, 0, 3, 0, 0);
+        if (output == -1)
+            return "";
+        try
+        {
+            var info = new byte[22];
+            fixed (byte* buffer = info)
+            {
+                if (!GetConsoleScreenBufferInfo(output, buffer))
+                    return "";
+                int width = *(short*)buffer, height = *(short*)(buffer + 2);
+                var text = new char[width * height];
+                fixed (char* chars = text)
+                    ReadConsoleOutputCharacterW(output, chars, (uint)text.Length, 0, out var read);
+                return new string(text);
+            }
+        }
+        finally
+        {
+            CloseHandle(output);
+        }
+    }
+
+    [System.Runtime.InteropServices.LibraryImport("kernel32.dll", StringMarshalling = System.Runtime.InteropServices.StringMarshalling.Utf16)]
+    private static partial nint CreateFileW(string name, uint access, uint share, nint security, uint disposition, uint flags, nint template);
+
+    [System.Runtime.InteropServices.LibraryImport("kernel32.dll")]
+    [return: System.Runtime.InteropServices.MarshalAs(System.Runtime.InteropServices.UnmanagedType.Bool)]
+    private static unsafe partial bool GetConsoleScreenBufferInfo(nint console, byte* info);
+
+    [System.Runtime.InteropServices.LibraryImport("kernel32.dll")]
+    [return: System.Runtime.InteropServices.MarshalAs(System.Runtime.InteropServices.UnmanagedType.Bool)]
+    private static unsafe partial bool ReadConsoleOutputCharacterW(nint console, char* text, uint length, uint origin, out uint read);
+
+    [System.Runtime.InteropServices.LibraryImport("kernel32.dll")]
+    [return: System.Runtime.InteropServices.MarshalAs(System.Runtime.InteropServices.UnmanagedType.Bool)]
+    private static partial bool CloseHandle(nint handle);
 }
