@@ -19,13 +19,14 @@ public static class Net
     /// on each; with IPv4 first that only matters when an IPv4 address is dead too.</summary>
     public static readonly TimeSpan PerAddress = TimeSpan.FromSeconds(20);
 
-    /// <summary>A handler whose connections try IPv4 addresses first, then IPv6.</summary>
-    public static SocketsHttpHandler CreateHandler() => new()
+    /// <summary>A handler whose connections try IPv4 addresses first, then IPv6. decompress false asks for no
+    /// compression (no Accept-Encoding), as Python's urllib didn't, so a reply's bytes arrive exactly as served.</summary>
+    public static SocketsHttpHandler CreateHandler(bool decompress = true) => new()
     {
         ConnectCallback = ConnectIpv4FirstAsync,
         ConnectTimeout = Graph.Timeout,
         PooledConnectionLifetime = TimeSpan.FromMinutes(5),
-        AutomaticDecompression = DecompressionMethods.All,
+        AutomaticDecompression = decompress ? DecompressionMethods.All : DecompressionMethods.None,
     };
 
     /// <summary>An HttpClient over <see cref="CreateHandler"/>, with the 60-second timeout.</summary>
@@ -43,9 +44,20 @@ public static class Net
     private static async ValueTask<Stream> ConnectIpv4FirstAsync(SocketsHttpConnectionContext context, CancellationToken cancel)
     {
         var endpoint = context.DnsEndPoint;
-        var addresses = IPAddress.TryParse(endpoint.Host, out var literal)
-            ? [literal]
-            : Ipv4First(await Dns.GetHostAddressesAsync(endpoint.Host, cancel).ConfigureAwait(false));
+        IReadOnlyList<IPAddress> addresses;
+        if (IPAddress.TryParse(endpoint.Host, out var literal))
+            addresses = [literal];
+        else
+        {
+            try
+            {
+                addresses = Ipv4First(await Dns.GetHostAddressesAsync(endpoint.Host, cancel).ConfigureAwait(false));
+            }
+            catch (SocketException error)
+            {
+                throw new HttpRequestException(HttpRequestError.NameResolutionError, $"Couldn't find {endpoint.Host}: {error.Message}", error);
+            }
+        }
         Exception? last = null;
         foreach (var address in addresses)
         {
@@ -68,7 +80,21 @@ public static class Net
                 throw;
             }
         }
-        throw new HttpRequestException($"Couldn't connect to {endpoint.Host}:{endpoint.Port} on any of its {addresses.Count} addresses.", last);
+        throw new HttpRequestException(HttpRequestError.ConnectionError,
+            $"Couldn't connect to {endpoint.Host}:{endpoint.Port} on any of its {addresses.Count} addresses.", last);
+    }
+
+    /// <summary>Whether a failed request certainly never reached the server: the name didn't resolve, no connection
+    /// opened, or TLS failed before anything was sent. Such a request is safe to send again even when it isn't
+    /// idempotent (a PATCH or POST). Read from HttpRequestException.HttpRequestError, which the IPv4-first connect
+    /// sets too (NameResolutionError, ConnectionError), so callers needn't match message text.</summary>
+    public static bool NeverSent(Exception error)
+    {
+        for (var e = error; e is not null; e = e.InnerException)
+            if (e is HttpRequestException { HttpRequestError: HttpRequestError.NameResolutionError or HttpRequestError.ConnectionError
+                    or HttpRequestError.SecureConnectionError })
+                return true;
+        return false;
     }
 
     /// <summary>A dropped, reset or stalled connection, rather than an answer: worth another try. MSAL wraps

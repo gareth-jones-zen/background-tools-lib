@@ -51,8 +51,10 @@ switch (args)
     case ["sleep"]:
         Thread.Sleep(TimeSpan.FromMinutes(1));
         return 0;
+    case ["aot-smoke"]:
+        return await AotSmoke.Run();
     default:
-        Console.Error.WriteLine("usage: LockHelper hold|try|async <name>, or echo or sleep");
+        Console.Error.WriteLine("usage: LockHelper hold|try|async <name>, or echo, sleep or aot-smoke");
         return 2;
 }
 

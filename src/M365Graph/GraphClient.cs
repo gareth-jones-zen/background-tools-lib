@@ -26,26 +26,59 @@ namespace M365Graph;
 public sealed class GraphClient
 {
     private static readonly HttpClient SharedHttp = Net.CreateHttpClient();
+    private static readonly HttpClient SharedRawHttp = Net.CreateHttpClient(Net.CreateHandler(decompress: false));
     private static readonly HashSet<HttpStatusCode> Retryable =
         [HttpStatusCode.TooManyRequests, HttpStatusCode.InternalServerError, HttpStatusCode.BadGateway,
          HttpStatusCode.ServiceUnavailable, HttpStatusCode.GatewayTimeout];
 
     private readonly HttpClient http;
-    private readonly SignIn signIn;
+    private readonly HttpClient rawHttp;
+    private readonly SignIn? signIn;
+    private readonly Func<IReadOnlyList<string>, CancellationToken, Task<string>>? token;
     private readonly Func<TimeSpan, CancellationToken, Task> delay;
+    private readonly Func<DateTimeOffset> clock;
 
     public GraphClient(GraphClientOptions? options = null)
         : this(options ?? new GraphClientOptions(), SharedHttp, null, null)
     {
+        rawHttp = SharedRawHttp;
     }
 
-    /// <summary>For tests: a fake HTTP handler, a fake sign-in, and no real waiting.</summary>
-    internal GraphClient(GraphClientOptions options, HttpClient http, SignIn? signIn, Func<TimeSpan, CancellationToken, Task>? delay)
+    /// <summary>A client whose requests all go through this handler: for a tool's adapter tests (a fake handler),
+    /// or a proxy. The handler is used as it is, so it decides about compression and connecting.
+    /// <para>token, when given, stands in for the sign-in: it gets the scopes asked for and returns an access
+    /// token, and MSAL is never used (tests need no cache file). Without it, the sign-in is the usual one through
+    /// the options' cache file, with MSAL's calls going through the handler too, and isn't shared with other
+    /// clients. delay replaces the waits between retries (tests record them rather than wait); clock is "now" for a
+    /// Retry-After given as a date.</para></summary>
+    public GraphClient(GraphClientOptions options, HttpMessageHandler handler,
+        Func<IReadOnlyList<string>, CancellationToken, Task<string>>? token = null,
+        Func<TimeSpan, CancellationToken, Task>? delay = null, Func<DateTimeOffset>? clock = null)
+    {
+        ArgumentNullException.ThrowIfNull(options);
+        ArgumentNullException.ThrowIfNull(handler);
+        Options = options;
+        http = rawHttp = new HttpClient(handler, disposeHandler: false) { Timeout = Graph.Timeout };
+        this.token = token;
+        if (token is null)
+        {
+            var client = http;
+            signIn = new SignIn(() => new MsalApp(options.CachePath, options.ClientId, options.Tenant, client));
+        }
+        this.delay = delay ?? Task.Delay;
+        this.clock = clock ?? (() => DateTimeOffset.UtcNow);
+        Log = options.Log ?? (text => { Console.Error.WriteLine(text); Console.Error.Flush(); });
+    }
+
+    /// <summary>For the library's own tests: a fake HTTP client, a fake sign-in, and no real waiting.</summary>
+    internal GraphClient(GraphClientOptions options, HttpClient http, SignIn? signIn, Func<TimeSpan, CancellationToken, Task>? delay,
+        Func<DateTimeOffset>? clock = null)
     {
         Options = options;
-        this.http = http;
+        this.http = rawHttp = http;
         this.signIn = signIn ?? SignIn.For(options, http);
         this.delay = delay ?? Task.Delay;
+        this.clock = clock ?? (() => DateTimeOffset.UtcNow);
         Log = options.Log ?? (text => { Console.Error.WriteLine(text); Console.Error.Flush(); });
     }
 
@@ -55,8 +88,12 @@ public sealed class GraphClient
 
     /// <summary>An access token for these scopes (default: the options' scopes). interactive overrides the options:
     /// false never opens a browser and throws SignInNeededException instead.</summary>
-    public Task<string> TokenAsync(IEnumerable<string>? scopes = null, bool? interactive = null, CancellationToken cancel = default) =>
-        signIn.TokenAsync(Options, scopes, interactive, Log, cancel);
+    public Task<string> TokenAsync(IEnumerable<string>? scopes = null, bool? interactive = null, CancellationToken cancel = default)
+    {
+        if (token is not null)
+            return token(scopes?.ToList() is { Count: > 0 } named ? named : Options.Scopes.ToList(), cancel);
+        return signIn!.TokenAsync(Options, scopes, interactive, Log, cancel);
+    }
 
     /// <summary>One Graph request, as JSON (an empty object for an empty reply). url may be relative ("/me") or a
     /// full URL (such as an @odata.nextLink).</summary>
@@ -157,14 +194,74 @@ public sealed class GraphClient
         }
     }
 
-    private static TimeSpan? RetryAfter(HttpResponseMessage response)
+    /// <summary>One request with the body's bytes as they are, and the reply's bytes as served: no JSON, no
+    /// "; charset" added to the Content-Type (it's sent exactly as given), and, on the default client, no
+    /// compression asked for. For content that isn't JSON (a OneNote page's HTML) and for bodies that have to be
+    /// byte for byte what the Python version sent.
+    /// <para>The reply comes back whatever its status: a status the policy doesn't retry, or one that still failed
+    /// after its tries, is returned for the caller to judge, not thrown. Network failures are retried as the policy
+    /// says, and the last one is thrown; a request the policy won't resend, that may have been delivered, throws
+    /// <see cref="GraphDeliveryUnknownException"/>. A Retry-After (seconds or a date) is honoured, otherwise the
+    /// waits are 5 s, 10 s, 15 s and so on. Retries are logged through the options' Log, as other calls' are.
+    /// Default policy: <see cref="GraphRetryPolicy.Read"/>.</para></summary>
+    public async Task<GraphRawResponse> SendRawAsync(HttpMethod method, string url, byte[]? body = null, string? contentType = null,
+        GraphRetryPolicy? policy = null, IEnumerable<string>? scopes = null, IReadOnlyDictionary<string, string>? headers = null,
+        CancellationToken cancel = default)
+    {
+        policy ??= GraphRetryPolicy.Read;
+        var full = url.StartsWith("http", StringComparison.Ordinal) ? url : Graph.BaseUrl + url;
+        var scopeList = scopes?.ToList();
+        for (var attempt = 1; ; attempt++)
+        {
+            var accessToken = await TokenAsync(scopeList, null, cancel).ConfigureAwait(false);
+            using var request = new HttpRequestMessage(method, full);
+            request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", accessToken);
+            if (body is not null)
+            {
+                request.Content = new ByteArrayContent(body);
+                if (contentType is not null)
+                    request.Content.Headers.TryAddWithoutValidation("Content-Type", contentType);
+            }
+            foreach (var (name, value) in headers ?? new Dictionary<string, string>())
+            {
+                if (!request.Headers.TryAddWithoutValidation(name, value))
+                    (request.Content ??= new ByteArrayContent([])).Headers.TryAddWithoutValidation(name, value);
+            }
+
+            TimeSpan wait;
+            try
+            {
+                using var response = await rawHttp.SendAsync(request, cancel).ConfigureAwait(false);
+                var raw = await response.Content.ReadAsByteArrayAsync(cancel).ConfigureAwait(false);
+                var status = (int)response.StatusCode;
+                if (response.IsSuccessStatusCode || !policy.Statuses.Contains(status) || attempt >= policy.Tries)
+                    return new GraphRawResponse(response.StatusCode, raw, ContentTypeOf(response));
+                wait = RetryAfter(response) ?? TimeSpan.FromSeconds(5 * attempt);
+            }
+            catch (Exception error) when (Net.IsNetworkError(error, cancel))
+            {
+                if (!policy.ResendAfterDelivery && !Net.NeverSent(error))
+                    throw new GraphDeliveryUnknownException(method.Method, url, error);
+                if (attempt >= policy.Tries)
+                    throw;
+                wait = TimeSpan.FromSeconds(5 * attempt);
+            }
+            Log($"Graph retry {attempt} in {wait.TotalSeconds:0}s: {method} {GraphRequestException.Shorten(full)}");
+            await delay(wait, cancel).ConfigureAwait(false);
+        }
+    }
+
+    private static string? ContentTypeOf(HttpResponseMessage response) =>
+        response.Content.Headers.TryGetValues("Content-Type", out var values) ? string.Join(", ", values) : null;
+
+    private TimeSpan? RetryAfter(HttpResponseMessage response)
     {
         var header = response.Headers.RetryAfter;
         if (header?.Delta is { } delta)
             return delta;
         if (header?.Date is { } date)
         {
-            var until = date - DateTimeOffset.UtcNow;
+            var until = date - clock();
             return until > TimeSpan.Zero ? until : TimeSpan.Zero;
         }
         return null;

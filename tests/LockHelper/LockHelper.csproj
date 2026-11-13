@@ -1,6 +1,7 @@
 <Project Sdk="Microsoft.NET.Sdk">
-  <!-- A child process for the lock tests (a NamedLock in another process), and the Native AOT check: CI
-       publishes it with AOT, so a warning in NamedLock under AOT fails the build. Not shipped. -->
+  <!-- A child process for the lock and Shell.Run tests, and the Native AOT check: CI publishes it with AOT (a
+       warning fails the build) and runs its async and aot-smoke modes, which exercise NamedLock, and the PyCompat,
+       WinBackground and M365Graph additions of 13 Nov 2026, under AOT. Not shipped. -->
   <PropertyGroup>
     <TargetFramework>net11.0-windows</TargetFramework>
     <OutputType>Exe</OutputType>
@@ -9,5 +10,7 @@
   </PropertyGroup>
   <ItemGroup>
     <ProjectReference Include="..\..\src\WinBackground\WinBackground.csproj" />
+    <ProjectReference Include="..\..\src\PyCompat\PyCompat.csproj" />
+    <ProjectReference Include="..\..\src\M365Graph\M365Graph.csproj" />
   </ItemGroup>
 </Project>

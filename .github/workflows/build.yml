@@ -22,6 +22,8 @@ jobs:
         run: dotnet publish tests/LockHelper -c Release -r win-x64 -o out/aot
       - name: Run the AOT build
         run: out/aot/LockHelper.exe async ci-aot-check
+      - name: Run the AOT build (PyCompat, WinBackground and M365Graph smoke)
+        run: out/aot/LockHelper.exe aot-smoke
       - name: Publish (Native AOT)
         run: |
           dotnet publish src/ClaudeHeadless.Console -c Release -r win-x64 -o out
