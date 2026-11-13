@@ -1,7 +1,11 @@
 <Project Sdk="Microsoft.NET.Sdk">
   <!-- The bits of Python's behaviour a port has to reproduce exactly, so its files and output match the Python
-       tool's byte for byte: json.dumps, pathlib, str.strip / splitlines, text-mode files, aware datetimes.
-       First written for ai-keep-awake (Py, PyJson, PyPath); shared from here. Not Windows-specific. -->
+       tool's byte for byte: str methods, json.dumps, pathlib, datetime, re, html, difflib, text-mode files.
+       First written for ai-keep-awake (Py, PyJson, PyPath); merged with the ports' own copies on 13 Nov 2026.
+       Not Windows-specific, apart from PyPath.Resolve following links through kernel32 when it runs on Windows. -->
+  <PropertyGroup>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+  </PropertyGroup>
   <ItemGroup>
     <InternalsVisibleTo Include="PyCompat.Tests" />
   </ItemGroup>

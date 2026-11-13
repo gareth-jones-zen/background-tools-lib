@@ -1,10 +1,12 @@
+using System.Runtime.InteropServices;
 using System.Text;
 
 namespace PyCompat;
 
 /// <summary>Paths handled as Python's pathlib and ntpath did on Windows: ~ and %VARIABLES% expanded the same
-/// way, and the same text for a path (it goes into the hooks' arguments and the watcher's lock name).</summary>
-public static class PyPath
+/// way, resolve() following links and correcting case, and the same text for a path (it goes into the hooks'
+/// arguments and the watcher's lock name).</summary>
+public static partial class PyPath
 {
     /// <summary>The home folder, as Path.home() finds it.</summary>
     public static string Home(Func<string, string?> env)
@@ -47,9 +49,82 @@ public static class PyPath
         return p.StartsWith(@"\\", StringComparison.Ordinal) || (p.Length >= 3 && p[1] == ':' && p[2] == '\\');
     }
 
-    /// <summary>Path(x).resolve() for a relative x: made absolute against the current folder, ".." collapsed.
-    /// (Symbolic links and 8.3 short names aren't resolved; see the port notes.)</summary>
-    public static string Resolve(string path) => Pure(Path.GetFullPath(path));
+    /// <summary>Path(x).resolve() on Windows (ntpath.realpath, not strict): made absolute against the current
+    /// folder, ".." collapsed, then links followed and the case corrected to what's on disk, through
+    /// GetFinalPathNameByHandle. A path that doesn't exist yet resolves its longest existing part and keeps the rest
+    /// as given. The text matters: it goes into state-file keys, hook arguments and lock names, so a Python and a
+    /// .NET process given the same path in a different case still agree. (Elsewhere than Windows: as
+    /// <see cref="Absolute"/>.)</summary>
+    public static string Resolve(string path)
+    {
+        var full = Pure(Path.GetFullPath(path));
+        if (!OperatingSystem.IsWindows())
+            return full;
+        var tail = new List<string>();
+        var current = full;
+        while (true)
+        {
+            var final = FinalPath(current);
+            if (final is not null)
+            {
+                tail.Reverse();
+                return Pure(tail.Count == 0 ? final : Path.Combine([final, .. tail]));
+            }
+            var parent = Path.GetDirectoryName(current);
+            if (string.IsNullOrEmpty(parent) || parent == current)
+                return full;
+            tail.Add(Path.GetFileName(current));
+            current = parent;
+        }
+    }
+
+    /// <summary>The path made absolute against the current folder with ".." collapsed, by its text alone: no links
+    /// followed and the case as given. (This was Resolve until 13 Nov 2026.)</summary>
+    public static string Absolute(string path) => Pure(Path.GetFullPath(path));
+
+    private const uint FileShareRead = 1, FileShareWrite = 2, OpenExisting = 3, FileFlagBackupSemantics = 0x02000000;
+
+    [LibraryImport("kernel32.dll", EntryPoint = "CreateFileW", StringMarshalling = StringMarshalling.Utf16, SetLastError = true)]
+    private static partial nint CreateFile(string name, uint access, uint share, nint security, uint disposition, uint flags, nint template);
+
+    [LibraryImport("kernel32.dll", EntryPoint = "GetFinalPathNameByHandleW", SetLastError = true)]
+    private static unsafe partial uint GetFinalPathNameByHandle(nint file, char* buffer, uint size, uint flags);
+
+    [LibraryImport("kernel32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static partial bool CloseHandle(nint handle);
+
+    /// <summary>_getfinalpathname without the \\?\ prefix, or null if the path can't be opened.</summary>
+    private static unsafe string? FinalPath(string path)
+    {
+        var handle = CreateFile(path, 0, FileShareRead | FileShareWrite, 0, OpenExisting, FileFlagBackupSemantics, 0);
+        if (handle == -1 || handle == 0)
+            return null;
+        try
+        {
+            var buffer = new char[1024];
+            while (true)
+            {
+                uint length;
+                fixed (char* p = buffer)
+                    length = GetFinalPathNameByHandle(handle, p, (uint)buffer.Length, 0);
+                if (length == 0)
+                    return null;
+                if (length < buffer.Length)
+                {
+                    var final = new string(buffer, 0, (int)length);
+                    if (final.StartsWith(@"\\?\UNC\", StringComparison.Ordinal))
+                        return @"\\" + final[8..];
+                    return final.StartsWith(@"\\?\", StringComparison.Ordinal) ? final[4..] : final;
+                }
+                buffer = new char[length + 1];
+            }
+        }
+        finally
+        {
+            CloseHandle(handle);
+        }
+    }
 
     /// <summary>(base / path).resolve(): a path with a root but no drive takes the base's drive, as pathlib does.</summary>
     public static string ResolveAgainst(string basePath, string path)

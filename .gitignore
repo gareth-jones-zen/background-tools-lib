@@ -4,3 +4,4 @@ out/
 TestResults/
 *.user
 .vs/
+__pycache__/

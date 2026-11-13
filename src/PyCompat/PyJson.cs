@@ -59,15 +59,17 @@ public static class PyJson
     }
 
     /// <summary>json.dumps: indent null gives ", " and ": " on one line; an indent gives "," and ": " with
-    /// newlines. ensureAscii escapes everything outside printable ASCII as \uXXXX (Python's default).</summary>
-    public static string Dump(JsonNode? node, int? indent = null, bool ensureAscii = true)
+    /// newlines (indent 0 gives newlines and no indent, as Python's does). ensureAscii escapes everything outside
+    /// printable ASCII as \uXXXX (Python's default). sortKeys writes each object's keys in Python's order, by code
+    /// point (sort_keys=True).</summary>
+    public static string Dump(JsonNode? node, int? indent = null, bool ensureAscii = true, bool sortKeys = false)
     {
         var builder = new StringBuilder();
-        Write(builder, node, indent, ensureAscii, 0);
+        Write(builder, node, indent, ensureAscii, sortKeys, 0);
         return builder.ToString();
     }
 
-    private static void Write(StringBuilder b, JsonNode? node, int? indent, bool ascii, int level)
+    private static void Write(StringBuilder b, JsonNode? node, int? indent, bool ascii, bool sort, int level)
     {
         switch (node)
         {
@@ -82,13 +84,14 @@ public static class PyJson
                 }
                 b.Append('{');
                 var first = true;
-                foreach (var (key, value) in obj)
+                IEnumerable<KeyValuePair<string, JsonNode?>> pairs = sort ? obj.OrderBy(pair => pair.Key, PyStr.Order) : obj;
+                foreach (var (key, value) in pairs)
                 {
                     Separator(b, indent, level + 1, first);
                     first = false;
                     Quote(b, key, ascii);
                     b.Append(": ");
-                    Write(b, value, indent, ascii, level + 1);
+                    Write(b, value, indent, ascii, sort, level + 1);
                 }
                 Close(b, indent, level);
                 b.Append('}');
@@ -103,7 +106,7 @@ public static class PyJson
                 for (var i = 0; i < array.Count; i++)
                 {
                     Separator(b, indent, level + 1, i == 0);
-                    Write(b, array[i], indent, ascii, level + 1);
+                    Write(b, array[i], indent, ascii, sort, level + 1);
                 }
                 Close(b, indent, level);
                 b.Append(']');
@@ -180,7 +183,18 @@ public static class PyJson
     /// order mark is kept (so json.loads refuses it).</summary>
     public static string ReadStrict(string path) => new UTF8Encoding(false, true).GetString(File.ReadAllBytes(path));
 
-    private static void Quote(StringBuilder b, string text, bool ascii)
+    /// <summary>json.dumps(text) for one string: with ensureAscii (Python's default) everything outside printable
+    /// ASCII is \uXXXX (lower-case hex, a character beyond U+FFFF as its two surrogates); without it, only what JSON
+    /// requires. Either way \" \\ \n \r \t \b \f have their short forms and other control characters are \u00XX.</summary>
+    public static string Quote(string text, bool ensureAscii = true)
+    {
+        var builder = new StringBuilder(text.Length + 2);
+        Quote(builder, text, ensureAscii);
+        return builder.ToString();
+    }
+
+    /// <summary><see cref="Quote(string, bool)"/>, appended to a builder.</summary>
+    public static void Quote(StringBuilder b, string text, bool ascii)
     {
         b.Append('"');
         foreach (var c in text)

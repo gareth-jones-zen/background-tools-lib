@@ -254,4 +254,13 @@ public static class Py
 
     /// <summary>Text as Python's print() wrote it on Windows: each "\n" as "\r\n".</summary>
     public static string Lines(string text) => text.Replace("\r\n", "\n").Replace("\n", Environment.NewLine);
+
+    /// <summary>items[start:] with Python's meaning of a negative start: items[-2:] is the last two, and items[-0:]
+    /// (start 0) is all of them.</summary>
+    public static List<T> From<T>(IReadOnlyList<T> items, int start)
+    {
+        if (start < 0)
+            start = Math.Max(0, items.Count + start);
+        return items.Skip(Math.Min(start, items.Count)).ToList();
+    }
 }
