@@ -293,9 +293,18 @@ public sealed class NamedLock : IDisposable
 /// locks after the thing they protect: Key() turns a path into a short stable name.</summary>
 public static class Locks
 {
-    /// <summary>16 hex characters from a path or other text, ignoring case (Windows paths).</summary>
-    public static string Key(string text) =>
-        Convert.ToHexStringLower(SHA256.HashData(Encoding.UTF8.GetBytes(text.ToLowerInvariant())))[..16];
+    /// <summary>16 hex characters from a path or other text, ignoring case (Windows paths): win_background's
+    /// key(), the first 16 hex characters of the SHA-256 of <c>str(text).lower()</c> in UTF-8, so a .NET and a
+    /// Python tool name the same lock. Lower-cased as Python's <c>str.lower()</c> does (<c>PyStr.Lower</c>), which
+    /// differs from .NET's invariant lower case for U+0130 (capital I with dot, two characters in Python) and a
+    /// capital sigma at the end of a word (a final sigma). Until v0.3 (13 Nov 2026) this used ToLowerInvariant,
+    /// so a key for text with either of those changed then. The text is used as given: a path isn't
+    /// normalised (EdgeProfile.Key does that for a profile folder).</summary>
+    public static string Key(string text)
+    {
+        ArgumentNullException.ThrowIfNull(text);
+        return Convert.ToHexStringLower(SHA256.HashData(Encoding.UTF8.GetBytes(PyCompat.PyStr.Lower(text))))[..16];
+    }
 
     /// <summary>The lock for a long-running process, such as a watcher: held until it exits or releases it.
     /// Null if another process, or another NamedLock in this one, already holds it.</summary>

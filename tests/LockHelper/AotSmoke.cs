@@ -26,6 +26,13 @@ internal static class AotSmoke
         Check(string.Join("|", UnifiedDiff.Lines(["a"], ["b"], "x", "y")) == "--- x|+++ y|@@ -1 +1 @@|-a|+b", "UnifiedDiff");
         Check(PyStr.Lower("ABC") == "abc" && PyStr.Int(" 4_2 ") == 42, "PyStr");
         Check(PyPath.Resolve(Path.GetTempPath()).Length > 3, "PyPath.Resolve");
+        // v0.3: the generated Unicode tables, named groups, emoji as one character, Python's IGNORECASE, str.format.
+        var emoji = char.ConvertFromUtf32(0x1F600);
+        Check(PyStr.Lower("İΣAΣ") == "i̇σaς" && PyStr.CaseFold("Straße") == "strasse", "PyStr v0.3");
+        Check(PyRegex.Get("(?P<who>[A-Z]{2}) catch-?up").Find("AM catch-up")?.Group("who") == "AM", "PyRegex groups");
+        Check(PyRegex.Get(".").FindAll("a" + emoji).Count == 2 && PyRegex.IsMatch("lis", "LİS", true), "PyRegex v0.3");
+        Check(PyFormat.Format("{who} {date:%Y-%m}", new Dictionary<string, object?> { ["who"] = "AM", ["date"] = new DateOnly(2026, 11, 2) }) == "AM 2026-11", "PyFormat");
+        Check(Py.ReprString("a b") == "'a\\xa0b'" && Locks.Key("a.md") == "fecccc97532467ad", "ReprString and Locks.Key");
 
         var echo = Shell.Run(Environment.ProcessPath!, ["echo"], TimeSpan.FromSeconds(30), stdin: "x\n", utf8: true);
         Check(echo.ExitCode == 7 && echo.StandardOutput.Contains("x\n", StringComparison.Ordinal), "Shell.Run");

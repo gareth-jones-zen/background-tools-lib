@@ -8,4 +8,8 @@
   <ItemGroup>
     <InternalsVisibleTo Include="WinBackground.Tests" />
   </ItemGroup>
+  <ItemGroup>
+    <!-- Python's str.lower() for Locks.Key, so a lock name is the same as win_background's. -->
+    <ProjectReference Include="..\PyCompat\PyCompat.csproj" />
+  </ItemGroup>
 </Project>

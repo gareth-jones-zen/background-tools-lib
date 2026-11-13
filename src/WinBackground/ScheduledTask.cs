@@ -9,8 +9,14 @@ public interface ITask
     string Enable(string exe, IReadOnlyList<string> args, string? workingDir);
 
     /// <summary>Create or replace the task with these triggers and limits (a job run every few minutes, say), and
-    /// start it now unless the schedule says not to. Returns the command line.</summary>
-    string Enable(string exe, IReadOnlyList<string> args, string? workingDir, TaskSchedule schedule);
+    /// start it now unless the schedule says not to. Returns the command line.
+    /// <para>Added after ITask was first published, so it has a default (v0.3): the watcher schedule goes to the
+    /// three-argument Enable, as ScheduledTask's does, and any other schedule throws NotSupportedException. A test
+    /// fake written before it keeps compiling; one that needs schedules overrides it.</para></summary>
+    string Enable(string exe, IReadOnlyList<string> args, string? workingDir, TaskSchedule schedule) =>
+        schedule == TaskSchedule.Watcher
+            ? Enable(exe, args, workingDir)
+            : throw new NotSupportedException($"{GetType().Name} doesn't implement Enable with a schedule.");
 
     /// <summary>Stop and remove the task. False if there wasn't one.</summary>
     bool Disable();
@@ -18,8 +24,10 @@ public interface ITask
     /// <summary>Stop the task and wait (up to 30 seconds) for its process to exit. False if there's no task.</summary>
     bool Stop();
 
-    /// <summary>Start the task now, as it is (to undo a Stop when what came after it failed). False if there's no task.</summary>
-    bool Start();
+    /// <summary>Start the task now, as it is (to undo a Stop when what came after it failed). False if there's no task.
+    /// <para>Added after ITask was first published, so it has a default (v0.3) that throws NotSupportedException:
+    /// a test fake written before it keeps compiling, and says so plainly if a test reaches it.</para></summary>
+    bool Start() => throw new NotSupportedException($"{GetType().Name} doesn't implement Start.");
 
     /// <summary>Null if there's no task; otherwise state, command, last_run, last_result and next_run.</summary>
     IReadOnlyDictionary<string, string>? Status();
