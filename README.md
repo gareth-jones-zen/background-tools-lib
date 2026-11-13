@@ -12,8 +12,10 @@ Shared .NET libraries for a set of small personal background tools on Windows: w
 | `src/M365Graph` | A small Microsoft Graph client: one sign-in per process, a token cache shared with the Python tools, requests with a timeout and retries, paging, and IPv4 first | Any (`net11.0`) |
 | `src/ClaudeHeadless` | Running Claude Code headless (`claude -p`) from background tools, and surviving the usage limit: one job queue per seat, shared with the Python claude-headless. Also `claude-headless.exe` and its windowless twin | Windows only (`net11.0-windows`) |
 | `src/PyCompat` | The bits of Python's behaviour a port has to reproduce exactly, so its files and output match the Python tool's byte for byte | Any (`net11.0`) |
+| `src/EdgeDevTools` | The installed Microsoft Edge driven over the DevTools protocol through a pipe, with no Playwright or Node: launch on a profile, pages, script, clicks, request headers, a clean close, and Edge ending with the process that started it. Also the Edge profile's lock key (the same as the Python tools') and Microsoft sign-in page recognition | Windows only (`net11.0-windows`) |
+| `src/PeopleFirstClient` | People First (MHR's HR system) read as you through its web app's own single sign-on: a hidden Edge takes the token, then HttpClient reads the API. GET only. A port of `people-first-client` | Windows only (`net11.0-windows`) |
 
-Windows-only code lives in `WinBackground` and nowhere else, so other projects can later build for other platforms, and any of them could become a NuGet package.
+Windows-only code lives in the Windows-only projects (`WinBackground`, `ClaudeHeadless`, and `EdgeDevTools` and `PeopleFirstClient`, which drive Edge on Windows), so `M365Graph` and `PyCompat` can later build for other platforms, and any of them could become a NuGet package.
 
 All the libraries are AOT- and trim-checked (`IsAotCompatible`), build with warnings as errors, and publish under Native AOT with no warnings.
 
@@ -159,6 +161,56 @@ claude-headless autostart on  # run the queue every 15 minutes and at logon (cla
 `Py`, `PyJson` and `PyPath` were first written for ai-keep-awake's port, and are copied here unchanged apart from the namespace. `PyStr` (Python's whitespace, code-point slices, splitlines, text-mode files) and `PyTime` (zoneinfo-style wall-clock arithmetic, isoformat) are new. Each has tests, with expected values printed by Python 3.14.
 
 **A trap worth knowing:** a C# hex escape such as the one for U+001C takes up to four hex digits, so when it's followed by a letter that is also a hex digit it swallows it. Use the four-digit `u` escape in tests.
+### EdgeDevTools
+
+Drives the installed Edge directly over the DevTools protocol, for tools that only need a browser for a sign-in. Playwright for .NET can't be compiled with Native AOT and brings Node (about 110 MB); this is a few hundred KB of AOT-clean code, and a tool built on it publishes as a single exe of about 6 MB.
+
+```csharp
+using EdgeDevTools;
+
+await using var edge = await EdgeBrowser.LaunchAsync(new EdgeLaunchOptions { UserDataDir = profile });   // hidden
+edge.RequestSent += request => { /* request.Url, request.Header("authorization") */ };
+var page = await edge.NewPageAsync("https://example.com/");
+var title = (await edge.EvaluateAsync(page, "document.title")).GetString();
+if (await edge.FindTextAsync(page, "Sign in", exact: true) is { } at)
+    await edge.ClickAsync(page, at.X, at.Y);
+```
+
+- **The pipe, not a port.** Edge is started with `--remote-debugging-pipe`, so nothing listens on the network. .NET's `Process` can't hand a child the extra file descriptors (3 and 4) that needs, so `PipeTransport` calls `CreateProcessW` and passes them the way the C runtime inherits them (`STARTUPINFO.lpReserved2`), as Node does.
+- **Edge dies with the tool.** It runs in a job object that ends every process in it when the tool's handle closes, however the tool ends; Edge also exits when the pipe closes. `CloseAsync` (or disposing) asks Edge to close, waits up to 15 seconds, then ends it.
+- **Every page, frame and worker is attached from its first request** (`Target.setAutoAttach` with each one paused until its network events are on), so a sign-in pop-up or a redirect through another site can't slip past. `RequestSent` merges `requestWillBeSent` with its extra-info event, which carries the headers the page's own list leaves out.
+- **No reflection:** messages are written with `Utf8JsonWriter` and read with `JsonDocument`.
+- **It only reads and clicks.** Nothing in it reads or changes cookies or storage, or types into a page.
+- **`EdgeProfile`**: `Key(path)` is the 16-character key win-background (Python) gives the same profile, byte for byte: it spells the path as `str(pathlib.Path(os.path.abspath(p)))` does and lower-cases as Python's `str.lower()` does (which differs from .NET's for U+0130 and a final capital sigma). So a .NET and a Python tool sharing a profile lock the same mutex. `IsOpen(path)` says whether an Edge has the profile open (Edge holds `lockfile` in it, shared for reading only, and deletes it on close); `LaunchAsync` checks it rather than handing a second Edge to the first.
+- **`MicrosoftSignIn`**: one probe script per tab reports what's showing (the address, a button, an account tile, password, email, code and approval prompts, Windows Hello), and `Classify` decides, in C# where it's tested without a browser, whether it's the account picker (which needs no one) or something that needs a person.
+
+It lives apart from `WinBackground` because it's about Edge, and so `EdgeProfile` sits with it: a future Playwright-based project can reference this small project for the profile key.
+
+### PeopleFirstClient
+
+A port of the Python [people-first-client](https://github.com/gareth-jones-zen/people-first-client) 0.1.0, for org-directory and team-leave.
+
+```csharp
+using PeopleFirstClient;
+
+var settings = new Settings(url: "https://yourorg.people-first.com", account: "you@example.com",
+                            edgeProfile: @"C:\Users\you\AppData\Local\my-tool\edge-profile",
+                            signInHint: "At a console, run: my-tool sign-in");
+using var api = await Session.OpenAsync(settings, new SessionOptions { Log = Console.WriteLine });
+var me = await api.MeAsync();
+foreach (var person in await api.TeamMembersAsync(me))
+{
+    var absences = await api.EventsAsync(person.GetProperty("personId").GetString()!, start, end);
+}
+```
+
+- **The same API as Python:** `Settings` (the url loses trailing slashes; the tenant code defaults to the url's first part), a GET-only `Api` (`MeAsync`, `TeamAsync`, `TeamMembersAsync`, `EventsAsync`, `ContactAsync`, `GetAsync`, and `GetBytesAsync` for raw bodies), `ReportingLine.GetAsync`, `SignInWindow.RunAsync` (a visible window for a sign-in that needs a person), `SignInNeededException` (its message ends with the settings' sign-in hint) and `PeopleFirstException`. Paging, query strings and error messages are Python's.
+- **Edge closes as soon as the token is captured.** People First needs only the bearer token, `TenantCode`, an empty `EnvironmentCode` and `Accept`, and no cookies, so the API is read with `HttpClient` (IPv4 first, 60-second timeout) after the browser has gone. Checked on a copy of a real profile on 13 Nov 2026: `/profile`, `team/people` and `team` were byte-identical to Python's, compared by hash and length only.
+- **A sign-in that needs a person stops at once.** Python's only check was for a password box, so an Authenticator prompt, Windows Hello or an email box sat there for the full 3 minutes (found by the DevTools spike, 12 Nov 2026). Now, unattended, any Microsoft page that needs a person raises `SignInNeededException` on the next look, and any other Microsoft page still showing 20 seconds after the account tile was clicked (or after it appeared) does too. Redirects through Microsoft pass in a second or two, so they aren't cut short. A sign-in window never stops early: a person is there.
+- **The profile lock** is `people-first-edge-{EdgeProfile.Key(profile)}`, the same named mutex as Python's, so Python and .NET tools take turns on a shared profile (tested both ways against Python itself). Without a held lock, `Session.OpenAsync` takes it only while Edge is open, a few seconds.
+- **Hold one `ProfileLock` for a run.** Python's lock is re-entrant within a process; `NamedLock` isn't. A tool that wants the profile for more than one sign-in takes `ProfileLock.AcquireAsync(profile)` once and passes it in `SessionOptions.HeldLock`. Taking a second one for the same profile while the process holds the first throws `InvalidOperationException` at once, rather than waiting 15 minutes on itself.
+
+**Before sharing a tool built on it:** the token is taken from People First's web app, and the tool isn't a registered API client. That's fine for reading your own permitted data on your own machine; distributing it to other people needs clearing with the HR system's owners and information security first (as the Python library's README says).
 
 ## Using it from a tool
 
@@ -191,7 +243,11 @@ dotnet test -c Release
 
 `tests/M365Graph.Tests` has one live test against the real Graph, skipped unless `M365GRAPH_LIVE_CACHE` names a token cache file (and `M365GRAPH_LIVE_TENANT` its tenant). It copies the file first and works on the copy, silently only, and reads only `/me`.
 
-`tests/LockHelper` is a small console used by the lock tests as another process. CI also publishes it with Native AOT, which checks the locks under AOT. Native AOT publishing needs the Visual Studio C++ build tools; from Git Bash, put `C:\Program Files (x86)\Microsoft Visual Studio\Installer` on the `PATH` so the SDK can find them.
+`tests/LockHelper` is a small console used by the lock tests as another process. CI also publishes it with Native AOT, which checks the locks under AOT.
+
+`tests/EdgeHelper` is the same for Edge: the child process for the "Edge dies with the process that started it" test, and the Native AOT check of `EdgeDevTools` and `PeopleFirstClient`, which CI publishes and runs against Edge on a throwaway profile (`smoke`: a `data:` page only, no network). Its `people-first` command is the live read-only comparison with Python; it prints only names, statuses and counts.
+
+`tests/EdgeDevTools.Tests` runs the real Edge, headless, on new empty profiles in the temp folder (skipped where Edge isn't installed). `tests/PeopleFirstClient.Tests` has the Python library's 9 tests ported, the sign-in paths against a fake browser, and two tests against Python itself (lock names, including this machine's People First profile path, and the mutex held by each side in turn), skipped unless Python and checkouts of `people-first-client` and `win-background` are found (`PEOPLE_FIRST_PYTHON`, `PEOPLE_FIRST_CLIENT_SRC`, `WIN_BACKGROUND_SRC`, or the usual places). Native AOT publishing needs the Visual Studio C++ build tools; from Git Bash, put `C:\Program Files (x86)\Microsoft Visual Studio\Installer` on the `PATH` so the SDK can find them.
 
 ## Licence
 

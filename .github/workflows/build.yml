@@ -27,3 +27,7 @@ jobs:
           dotnet publish src/ClaudeHeadless.Console -c Release -r win-x64 -o out
           dotnet publish src/ClaudeHeadless.Background -c Release -r win-x64 -o out
           Get-ChildItem out/*.exe | Format-Table Name, Length
+      - name: Native AOT check (EdgeDevTools and PeopleFirstClient)
+        run: dotnet publish tests/EdgeHelper -c Release -r win-x64 -o out/aot-edge
+      - name: Run the AOT build against Edge (a throwaway profile, no network)
+        run: out/aot-edge/EdgeHelper.exe smoke "$env:RUNNER_TEMP\edge-smoke-profile"
