@@ -4,6 +4,8 @@ using WinBackground;
 //                          "release" releases it and prints "released"; "exit" ends the process still holding it
 // LockHelper try <name>    exit 0 if the lock could be taken (and releases it), 1 if not
 // LockHelper async <name>  take it, hop threads with await, release, and check it's free: prints "ok" or why not
+// LockHelper echo          for Shell.Run's tests: the working folder and stdin back, odd bytes, exit 7
+// LockHelper sleep         for Shell.Run's timeout test: sleeps a minute
 switch (args)
 {
     case ["hold", var name]:
@@ -33,8 +35,24 @@ switch (args)
     }
     case ["async", var name]:
         return await AsyncRoundTrip(name);
+    case ["echo"]:
+    {
+        // For Shell.Run's tests: the working folder, then stdin's bytes as they came, then a byte that isn't
+        // UTF-8, a CRLF and a lone CR, all on stdout; "err" on stderr.
+        using var input = new MemoryStream();
+        Console.OpenStandardInput().CopyTo(input);
+        using var stdout = Console.OpenStandardOutput();
+        stdout.Write(System.Text.Encoding.UTF8.GetBytes("cwd=" + Environment.CurrentDirectory + "\n"));
+        stdout.Write(input.ToArray());
+        stdout.Write([0xFF, (byte)'\r', (byte)'\n', (byte)'x', (byte)'\r']);
+        Console.Error.Write("err");
+        return 7;
+    }
+    case ["sleep"]:
+        Thread.Sleep(TimeSpan.FromMinutes(1));
+        return 0;
     default:
-        Console.Error.WriteLine("usage: LockHelper hold|try|async <name>");
+        Console.Error.WriteLine("usage: LockHelper hold|try|async <name>, or echo or sleep");
         return 2;
 }
 

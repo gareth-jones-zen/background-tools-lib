@@ -308,6 +308,31 @@ public static class Locks
         return null;
     }
 
+    /// <summary>win_background's exclusive(name, timeout, what): waits up to timeoutSeconds for the lock and
+    /// returns it held (dispose it to release), or throws TimeoutException with Python's wording, "Another {what}
+    /// didn't finish within {minutes} minutes." (the minutes rounded as Python's "{:.0f}" does, half to even). The
+    /// same Local\ mutex as Python's, so a Python and a .NET process exclude each other.</summary>
+    public static NamedLock Exclusive(string name, double timeoutSeconds = 600, string what = "run")
+    {
+        var held = new NamedLock(name);
+        try
+        {
+            if (held.Acquire(timeoutSeconds))
+                return held;
+        }
+        catch
+        {
+            held.Dispose();
+            throw;
+        }
+        held.Dispose();
+        throw new TimeoutException($"Another {what} didn't finish within {Minutes(timeoutSeconds)} minutes.");
+    }
+
+    /// <summary>f"{seconds / 60:.0f}": whole minutes, a half rounded to even.</summary>
+    internal static string Minutes(double seconds) =>
+        Math.Round(seconds / 60, MidpointRounding.ToEven).ToString("0", System.Globalization.CultureInfo.InvariantCulture);
+
     /// <summary>Whether some process (this one included) has the lock open, in practice holds it, without ever
     /// acquiring it. A probe that acquired it, even for a moment, could make a watcher starting at that moment
     /// think another was running and exit. The mutex exists only while a process has it open, and a holder keeps
