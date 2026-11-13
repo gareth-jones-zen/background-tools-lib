@@ -8,12 +8,19 @@ namespace PyCompat;
 /// splitlines, and text files read and written in text mode on Windows.</summary>
 public static class PyStr
 {
-    private static readonly UTF8Encoding StrictUtf8 = new(false, true);
     private static readonly UTF8Encoding Utf8 = new(false);
 
     /// <summary>A Regex character-class body matching what Python's \s matches: use as [\s\x1c-\x1f]. (.NET's \s is
     /// char.IsWhiteSpace, which leaves out U+001C to U+001F.)</summary>
     public const string SpaceClass = @"\s\x1c-\x1f";
+
+    /// <summary>A .NET Regex pattern for one character Python's \s matches (str.isspace): [\s\x1c-\x1f]. For a tool's
+    /// own fixed patterns; patterns written in Python's dialect (settings) go through PyRegex.</summary>
+    public const string Space = "[" + SpaceClass + "]";
+
+    /// <summary>A .NET Regex pattern for one UTF-16 unit that isn't Python's whitespace (Python's \S). An emoji is two
+    /// units, so "\S+" still takes it whole, but a lone "\S" takes half of it: use PyRegex where that matters.</summary>
+    public const string NotSpace = "[^" + SpaceClass + "]";
 
     /// <summary>str.isspace for one character. Python counts U+001C to U+001F; .NET's char.IsWhiteSpace doesn't.
     /// Checked against every BMP character Python 3.14 accepts (tests/PyCompat.Tests/Generated). A surrogate (half
@@ -141,51 +148,91 @@ public static class PyStr
         return negative ? -value : value;
     }
 
-    /// <summary>str.lower(): Unicode's lower case, with Python's full mapping of U+0130 (capital I with dot, to "i"
-    /// and a combining dot) and its final-sigma rule. Everything else maps code point by code point, as .NET's
-    /// invariant lower case does (characters beyond U+FFFF included). Moved here from EdgeDevTools' EdgeProfile
-    /// (PythonLower) on 13 Nov 2026.</summary>
+    /// <summary>str.lower(): Python's full lower case (so U+0130, capital I with dot, becomes "i" and a combining
+    /// dot) with its final-sigma rule, from Python's own Unicode tables (PyUnicode.g.cs), so it agrees with Python
+    /// whatever Unicode version .NET has. A lone surrogate is kept as it is, as in Python. Moved here from
+    /// EdgeDevTools' EdgeProfile (PythonLower) on 13 Nov 2026; table-driven since v0.3.</summary>
     public static string Lower(string text)
     {
         ArgumentNullException.ThrowIfNull(text);
+        var i = 0;
+        while (i < text.Length && text[i] < 0x80 && !char.IsAsciiLetterUpper(text[i]))
+            i++;
+        if (i == text.Length)
+            return text;
         var result = new StringBuilder(text.Length);
-        var runes = text.EnumerateRunes().ToArray();
-        for (var i = 0; i < runes.Length; i++)
+        result.Append(text, 0, i);
+        while (i < text.Length)
         {
-            var rune = runes[i];
-            if (rune.Value == 0x0130)
-                result.Append("i̇");
-            else if (rune.Value == 0x03A3)
-                result.Append(FinalSigma(runes, i) ? 'ς' : 'σ');
+            var (cp, width) = PyUnicode.At(text, i);
+            if (cp == 0x03A3)
+                result.Append(FinalSigma(text, i) ? 'ς' : 'σ');
+            else if (cp < 0x80)
+                result.Append(char.ToLowerInvariant((char)cp));
+            else if (PyUnicode.Map(PyUnicode.LowerFrom, PyUnicode.LowerTo, cp) is { } lower)
+                result.Append(lower);
             else
-                result.Append(Rune.ToLowerInvariant(rune).ToString());
+                result.Append(text, i, width);
+            i += width;
         }
         return result.ToString();
     }
 
-    // Python's handle_capital_sigma: a final sigma if a cased letter comes before (skipping case-ignorable
-    // characters) and none comes after.
-    private static bool FinalSigma(Rune[] runes, int at)
+    /// <summary>str.casefold(): Python's full case folding (so "ß" becomes "ss" and a final sigma "σ"), from Python's
+    /// tables. For comparing text without regard to case, as Python code that calls casefold() does.</summary>
+    public static string CaseFold(string text)
     {
-        var j = at - 1;
-        while (j >= 0 && CaseIgnorable(runes[j]))
-            j--;
-        if (j < 0 || !Cased(runes[j]))
-            return false;
-        j = at + 1;
-        while (j < runes.Length && CaseIgnorable(runes[j]))
-            j++;
-        return j == runes.Length || !Cased(runes[j]);
+        ArgumentNullException.ThrowIfNull(text);
+        var result = new StringBuilder(text.Length);
+        for (var i = 0; i < text.Length;)
+        {
+            var (cp, width) = PyUnicode.At(text, i);
+            if (cp < 0x80)
+                result.Append(char.ToLowerInvariant((char)cp));
+            else if (PyUnicode.Map(PyUnicode.CaseFoldFrom, PyUnicode.CaseFoldTo, cp) is { } folded)
+                result.Append(folded);
+            else
+                result.Append(text, i, width);
+            i += width;
+        }
+        return result.ToString();
     }
 
-    private static bool Cased(Rune rune) =>
-        Rune.IsUpper(rune) || Rune.IsLower(rune) || Rune.GetUnicodeCategory(rune) == UnicodeCategory.TitlecaseLetter;
+    // Python's handle_capital_sigma: a final sigma if a cased character comes before (skipping case-ignorable
+    // ones) and none comes after.
+    private static bool FinalSigma(string text, int at)
+    {
+        var j = at;
+        while (j > 0)
+        {
+            var (cp, width) = Before(text, j);
+            j -= width;
+            if (PyUnicode.IsCaseIgnorable(cp))
+                continue;
+            if (!PyUnicode.IsCased(cp))
+                return false;
+            j = -1;
+            break;
+        }
+        if (j == 0)
+            return false;   // nothing cased before it
+        for (var k = at + 1; k < text.Length;)
+        {
+            var (cp, width) = PyUnicode.At(text, k);
+            k += width;
+            if (!PyUnicode.IsCaseIgnorable(cp))
+                return !PyUnicode.IsCased(cp);
+        }
+        return true;
+    }
 
-    private static bool CaseIgnorable(Rune rune) =>
-        Rune.GetUnicodeCategory(rune) is UnicodeCategory.NonSpacingMark or UnicodeCategory.EnclosingMark
-            or UnicodeCategory.Format or UnicodeCategory.ModifierLetter or UnicodeCategory.ModifierSymbol
-        || rune.Value is '\'' or '.' or ':' or 0x00B7 or 0x0387 or 0x05F4 or 0x2018 or 0x2019 or 0x2024 or 0x2027
-            or 0xFE13 or 0xFE52 or 0xFE55 or 0xFF07 or 0xFF0E or 0xFF1A;
+    private static (int CodePoint, int Width) Before(string text, int end)
+    {
+        var c = text[end - 1];
+        if (char.IsLowSurrogate(c) && end >= 2 && char.IsHighSurrogate(text[end - 2]))
+            return (char.ConvertToUtf32(text[end - 2], c), 2);
+        return (c, 1);
+    }
 
     /// <summary>str.expandtabs(tabsize): a tab moves to the next multiple of tabsize; "\n" and "\r" start a new
     /// column. Columns count code points, as Python's do.</summary>
@@ -328,9 +375,10 @@ public static class PyStr
     /// <summary>"\n" as Windows text mode writes it: "\r\n". (An existing "\r\n" becomes "\r\r\n", as in Python.)</summary>
     public static string WindowsNewlines(string text) => text.Replace("\n", "\r\n");
 
-    /// <summary>Path.read_text(encoding="utf-8") on Windows: invalid UTF-8 is an error (DecoderFallbackException),
-    /// a byte order mark is kept as U+FEFF, and newlines are universal.</summary>
-    public static string ReadText(string path) => UniversalNewlines(StrictUtf8.GetString(File.ReadAllBytes(path)));
+    /// <summary>Path.read_text(encoding="utf-8") on Windows: a byte order mark is kept as U+FEFF, and newlines are
+    /// universal. Invalid UTF-8 throws DecoderFallbackException with Python's UnicodeDecodeError message (since v0.3),
+    /// such as "'utf-8' codec can't decode byte 0xff in position 3: invalid start byte" (PyUtf8).</summary>
+    public static string ReadText(string path) => UniversalNewlines(PyUtf8.Decode(File.ReadAllBytes(path)));
 
     /// <summary>Path.write_text(text, encoding="utf-8") on Windows: "\n" written as "\r\n", no byte order mark.</summary>
     public static void WriteText(string path, string text) => File.WriteAllText(path, WindowsNewlines(text), Utf8);

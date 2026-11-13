@@ -205,28 +205,39 @@ public static class Py
     /// <summary>Python's f"{x:g}": six significant digits, no trailing zeros.</summary>
     public static string G(double x) => x.ToString("g6", Inv);
 
-    /// <summary>Python's repr(str), for messages.</summary>
+    /// <summary>Python's repr(str), for messages: quoted as Python chooses, with "\\", "\n", "\r", "\t" and the
+    /// quote escaped, and every character str.isprintable() refuses written as \xhh, \uhhhh or \Uhhhhhhhh (a
+    /// no-break space, a zero-width space, a lone surrogate), from Python's own table. A character beyond U+FFFF
+    /// counts as one, as in Python.</summary>
     public static string ReprString(string text)
     {
         var quote = text.Contains('\'') && !text.Contains('"') ? '"' : '\'';
-        var result = new StringBuilder().Append(quote);
-        foreach (var c in text)
+        var result = new StringBuilder(text.Length + 2).Append(quote);
+        for (var i = 0; i < text.Length;)
         {
-            switch (c)
+            var (cp, width) = PyUnicode.At(text, i);
+            switch (cp)
             {
-                case '\\': result.Append("\\\\"); break;
-                case '\n': result.Append("\\n"); break;
-                case '\r': result.Append("\\r"); break;
-                case '\t': result.Append("\\t"); break;
+                case '\\': result.Append(@"\\"); break;
+                case '\n': result.Append(@"\n"); break;
+                case '\r': result.Append(@"\r"); break;
+                case '\t': result.Append(@"\t"); break;
                 default:
-                    if (c == quote)
-                        result.Append('\\').Append(c);
-                    else if (c < 0x20 || c == 0x7f)
-                        result.Append("\\x").Append(((int)c).ToString("x2", Inv));
+                    if (cp == quote)
+                        result.Append('\\').Append(quote);
+                    else if (cp < 0x20 || cp == 0x7f)
+                        result.Append(@"\x").Append(cp.ToString("x2", Inv));
+                    else if (cp < 0x7f || PyUnicode.IsPrintable(cp))
+                        result.Append(text, i, width);
+                    else if (cp <= 0xff)
+                        result.Append(@"\x").Append(cp.ToString("x2", Inv));
+                    else if (cp <= 0xffff)
+                        result.Append(@"\u").Append(cp.ToString("x4", Inv));
                     else
-                        result.Append(c);
+                        result.Append(@"\U").Append(cp.ToString("x8", Inv));
                     break;
             }
+            i += width;
         }
         return result.Append(quote).ToString();
     }

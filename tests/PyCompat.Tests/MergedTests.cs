@@ -128,32 +128,50 @@ public class PythonOracleTests
 public class PyRegexTests
 {
     [Theory]
-    [InlineData("(?P<name>x)", "named group")]
-    [InlineData("(?P=name)", "named group")]
     [InlineData("(?<name>x)", "named group")]
+    [InlineData("(?P=name)", "isn't a group before it")]
+    [InlineData("(?P<n>a)(?P<n>b)", "twice")]
+    [InlineData("(?P<né>a)", "ASCII")]
     [InlineData(@"\p{L}", @"\p")]
-    [InlineData("[a-z-[aeiou]]", "subtraction")]
-    [InlineData("x{,3}", "{,n}")]
     [InlineData("a*+", "possessive")]
     [InlineData("a{2}+", "possessive")]
+    [InlineData("x{3,2}", "minimum is greater")]
     [InlineData("abc(?i)", "middle")]
     [InlineData("(?x)a b", "inline flag x")]
     [InlineData("(?a)x", "inline flag a")]
-    [InlineData("(?u)x", "inline flag u")]
     [InlineData("(?L)x", "inline flag L")]
+    [InlineData("(?(1)a|b)", "conditional")]
     [InlineData(@"(a)\1", "backreference")]
     [InlineData(@"\G", @"\G")]
-    [InlineData(@"\z", @"\z")]
     [InlineData(@"\N{EM DASH}", @"\N")]
-    [InlineData(@"\U0001F600", @"\U")]
-    [InlineData("(?>a)", "atomic")]
-    [InlineData("[[:alpha:]]", "POSIX")]
-    [InlineData(@"[\W]", @"\W inside")]
+    [InlineData(@"[\B]", @"\B inside")]
     public void The_guard_refuses_what_python_and_dotnet_read_differently(string pattern, string why)
     {
         var error = Assert.Throws<PyRegexUnsupportedException>(() => PyRegex.Translate(pattern));
         Assert.Contains(why, error.Message);
     }
+
+    [Fact]
+    public void A_group_reference_with_ignorecase_is_refused()
+    {
+        Assert.Null(PyRegex.Problem("(?P<n>a)-") is { } p ? p : null);
+        var error = Assert.Throws<PyRegexUnsupportedException>(() => PyRegex.Translate("(?P<n>a)(?P=n)", true));
+        Assert.Contains("IGNORECASE", error.Message);
+    }
+
+    [Theory]
+    // Read the same way by both since v0.3, where they were refused before: classes, escapes and quantifiers are
+    // worked out as Python reads them, so .NET's own meanings ("-[" subtraction, "[:") never arise.
+    [InlineData("(?P<name>x)(?P=name)")]
+    [InlineData("[a-z-[aeiou]]")]
+    [InlineData("x{,3}")]
+    [InlineData("(?u)x")]
+    [InlineData(@"\z")]
+    [InlineData(@"\U0001F600")]
+    [InlineData("(?>a)")]
+    [InlineData("[[:alpha:]]")]
+    [InlineData(@"[\W]")]
+    public void Patterns_refused_before_v03_are_translated(string pattern) => PyRegex.Translate(pattern);
 
     [Theory]
     [InlineData(@"@news\.example\.com$")]

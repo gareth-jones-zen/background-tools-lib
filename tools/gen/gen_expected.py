@@ -143,7 +143,193 @@ def lines() -> list[str]:
     return out
 
 
+# ---- v0.3: str.lower and casefold, lock keys, repr, UTF-8 errors, re, str.format ----
+
+TEXTS = [
+    "ABC \u0130stanbul", "\u03a3\u039f\u03a3", "\u039f\u03a3 \u03a3", "A\u03a3", "A\u03a3\u0301", "A\u0301\u03a3", "\u03a3",
+    "A.\u03a3", "\u03a3a", "A\u03a3\U0001F600", "\U0001F600\u03a3", "\U00010400\U00010401", "\u1e9e", "\u2160", "K\u212a",
+    "Stra\u00dfe", "\ufb03 \u0149", "\ud800x\udc00", "\U0001E900\U0001E922", "C:\\Users\\X\\Tools\\Mail-Triage.TOML",
+    "C:\\Users\\\u0130lker\\tools\\settings.toml", "D:\\\u039f\u0394\u039f\u03a3\\x.toml", "\u01c5\u01c4\u01c6", "\u0345\u03b9",
+]
+
+REPRS = [
+    "plain", "it's", "say \"hi\"", "both ' and \"", "tab\there\nnew\rret", "back\\slash", "\x00\x1f\x7f\x80\x9f\xa0\xad",
+    "caf\u00e9 \u2615 \U0001F600", "\u200b\u200d\u2028\u3000\ufeff", "\ud800 lone \udfff", "\U000e0001\U0010ffff\U0001F3FB",
+    "\u0378\u0590", "\u00ff\u0100",
+]
+
+UTF8 = [
+    b"ok", b"\xff", b"ab\xffcd", b"\xc3", b"\xc3(", b"\xe2\x82", b"\xe2(\xa1", b"\xe2\x82(", b"\xe0\x80\x80", b"\xed\xa0\x80",
+    b"\xf0\x9f\x98", b"\xf0\x9f", b"\xf0(\x8c\xbc", b"\xf0\x90(\xbc", b"\xf0\x90\x8c(", b"\xf4\x90\x80\x80", b"\xf5\x80\x80\x80",
+    b"\xc0\xaf", b"\x80", b"\xef\xbb\xbfx\r\ny\rz\xfe", b"\xe0\xa0", b"\xed\x9f", b"\xed\xa0",
+]
+
+REGEX = [
+    # (pattern, ignore case, text)
+    (r".", False, "a\U0001F600b"), (r".+", False, "x\U0001F600y\nz"), (r"(?s).", False, "\n\U0001F600"),
+    (r"\w+", False, "abc \U0001D400\U0001D401 d\u0301 \u2160"), (r"\W", False, "a\U0001F600b \U0001D400"),
+    (r"\d+", False, "12\U0001D7CE\U0001D7CF 3"), (r"\D", False, "1\U0001F6002"), (r"\S", False, " \U0001F600 x"),
+    (r"\s+", False, "a\x1c\u3000b"), (r"[^a]", False, "a\U0001F600"), (r"[\U0001F600-\U0001F64F]+", False, "hi \U0001F600\U0001F64F!"),
+    (r"\U0001F600+", False, "\U0001F600\U0001F600x"), (r"\bword\b", False, "a word, \U0001D400word word\U0001D400"),
+    (r"\B", False, "ab \U0001D400\U0001D401"), (r"x*", False, "abxd"), (r"|a", False, "a"), (r"x*", False, "\U0001F600\U0001F600"),
+    (r"\b", False, "a b"), (r"(?m)^", False, "a\nb\n"), (r"(?m)$", False, "a\nb\n"), (r"$", False, "a\n"), (r"a\Z", False, "a\n"),
+    (r"a\z", False, "a"), (r"(?P<who>[A-Z]{2}) catch-?up", False, "AM catch-up and BW catchup"),
+    (r"(a)(?P<x>b)(c)?", False, "ab abc"), (r"(?P<y>\d+)-(?P=y)", False, "12-12 3-4"), (r"x{,2}", False, "xxxxx"),
+    (r"x{,}", False, "xxx"), (r"x{2,}?", False, "xxxx"), (r"a{1,2", False, "a{1,2"), (r"x{}", False, "x{}"),
+    (r"(?#comment)a", False, "aa"), (r"(?>a+)b", False, "aaab"), (r"[[:alpha:]]+", False, "a:[]p"),
+    (r"[a-z-[aeiou]]", False, "b-[x]"), (r"[\W\d]+", False, "ab12 !?c"), (r"[^\S\n]+", False, "a \t\nb"),
+    (r"you.re invited", True, "You\u2019re INVITED \U0001F600 you\U0001F600re invited"),
+    (r"sprint", True, "\u017fprint SPRINT \u017fPRINT"), (r"lis", True, "L\u0130S li\u0131s"), (r"\u0130", True, "i I \u0130 \u0131"),
+    (r"\u0131", True, "i I \u0130 \u0131"), (r"[\u0130]", True, "i I \u0130 \u0131"), (r"k", True, "k K \u212a"),
+    (r"\u212a", True, "k K \u212a"), (r"[a-z]+", True, "AbC\u0131\u017f\u212a"), (r"[^is]", True, "\u0131\u017fI"),
+    (r"\u00b5", True, "\u00b5\u03bc\u039c"), (r"\u03c3", True, "\u03a3\u03c3\u03c2"), (r"\u00df", True, "\u00df\u1e9e ss"),
+    (r"\U00010400", True, "\U00010428\U00010400"), (r"[\U00010400-\U0001044F]+", True, "\U00010428\U00010400x"),
+    (r"(?i:abc)def", False, "ABCdef ABCDEF"), (r"(?i)a(?-i:b)", False, "Ab AB"), (r"\x41\u00e9", True, "a\u00c9"),
+    (r"[\x41-\x43]", True, "abcd"), (r"caf\u00e9", False, "cafe\u0301 caf\u00e9"), (r"a|ab", False, "ab"),
+    (r"(?:a|b)*c", False, "ababc"), (r"\.\*\+", False, "a.*+"), (r"[.]", False, "a.b"), (r"[]a]+", False, "]a]b"),
+    (r"[^]a]", False, "]ab"), (r"[\b]", False, "a\x08b"), (r"[a\-z]", False, "-bz"), (r"[a-]", False, "-x"),
+    (r"(?u)\w", False, "\u00e9"), (r"(?s)a.c", False, "a\nc"), (r"(?m)^b", False, "a\nb"), (r"\$\^", False, "$^"),
+]
+
+FOLD_PATTERNS = [
+    "i", "I", "\u0130", "\u0131", "s", "\u017f", "k", "\u212a", "\u00b5", "\u03c3", "\u03c2", "\u03a3", "\u00df", "\u1e9e",
+    "\u01c5", "\u0345", "\u03b9", "\u1fbe", "\u03b2", "\u03d0", "\ufb05", "\U00010400", "\U0001E900", "\u2160", "\u24b6",
+    "[a-z]", "[^a-z]", "[A-Z]", "[\u0130]", "[\u0131]", "[i\u0130]", "[\u00b5]", "[\u0370-\u03ff]", "[\u0100-\u017f]",
+    r"[\w]", r"[a\W]", r"[a\d]", r"[^a\s]", "[\U00010400-\U0001044f]", "[\U00010428]", "[a-\U00010400]", "[\u2160-\u2188]",
+    "[\u24b6-\u24e9]", "[^k]", "[^\u0130]",
+]
+
+
+def fold_candidates() -> list[int]:
+    import _sre
+    from re._casefix import _EXTRA_CASES
+    out = set(range(0x20, 0x7f))
+    for c in range(0x110000):
+        if 0xD800 <= c <= 0xDFFF:
+            continue
+        ch = chr(c)
+        if _sre.unicode_tolower(c) != c or ch.upper() != ch or ch.lower() != ch or _sre.unicode_iscased(c):
+            out.add(c)
+            out.add(_sre.unicode_tolower(c))
+    for k, v in _EXTRA_CASES.items():
+        out.add(k)
+        out.update(v)
+    out.update([0x30, 0x39, 0x660, 0x1D7CE, 0x20, 0x3000, 0x1F600, 0xD800, 0xDC00])
+    return sorted(out)
+
+
+SAMPLE = {
+    "title": "Team Sync", "who": "AM", "empty": "", "date": dt.date(2026, 11, 2),
+    "start": dt.datetime(2026, 11, 12, 10, 5, 7, tzinfo=dt.timezone.utc), "naive": dt.datetime(2026, 11, 12, 9, 0),
+    "micro": dt.datetime(2026, 11, 12, 9, 0, 0, 1500), "bst": dt.datetime(2026, 7, 1, 9, 0, tzinfo=dt.timezone(dt.timedelta(hours=1))),
+    "n": 42, "neg": -7, "big": 1234567, "none": None, "flag": True, "uni": "caf\u00e9 \u2615 \U0001F600",
+}
+
+FORMATS = [
+    "{title}", "{date}", "{start}", "{naive}", "{micro}", "{bst}", "{date:%Y-%m}", "{start:%d %B %Y %I:%M%p}", "{title:>12}",
+    "{title:*^13}", "{title:.4}", "{title:<5.2}", "{uni:_>10}", "{uni:.6}", "{n}", "{n:5}", "{n:05}", "{n:<5}", "{neg:05}",
+    "{n:d}", "{n:+}", "{neg: }", "{big:,}", "{big:_d}", "{big:>12,}", "{n:^7}", "{n:*=+6}", "{none}", "{flag}", "{title!r}",
+    "{uni!r}", "{n!r}", "{none!r}", "{title!s:>11}", "{{x}} {title}", "{missing}", "{0}", "{}", "{00}", "{title", "title}",
+    "{", "x{", "}", "{title!x}", "{title!}", "{title!rs}", "{title:%Y}", "{title:d}", "{title:+}", "{title:#}", "{title:,}",
+    "{title:_}", "{title:=10}", "{title:010}", "{title:z}", "{date:%Q}", "{date:%}", "{date:}", "{start:}", "{n:.2}",
+    "{none:>5}", "{flag:>5}", "a}}b{{c", "{date:%Y-%m}{title!s}", "{ title}", "{title }", "{-}", "{title:}", "{title:s}",
+    "{title:<}", "{n:_}", "{title:x<}", "{date:%A %a %b %y %H %M %S %%}", "{naive:%p}", "{bst:%z}", "{start:%z}",
+    "{naive:%z}", "{date:literal text}", "{title:.}", "{title:..2}", "{title:5.2.1}", "{n:,_}", "{title:\U0001F600^9}",
+    "{who} catch-up {date:%Y-%m-%d}", "{title:{n}}", "{date.year}", "{title[0]}", "{title!a}", "{date!r}", "{date:%j}",
+]
+
+
+def regex_lines() -> list[str]:
+    import re
+
+    def u16(text: str, i: int) -> int:
+        return len(text[:i].encode("utf-16-le")) // 2
+
+    out = ["    /// <summary>pattern, IGNORECASE, text, then re.finditer's matches (UTF-16 start and end, groups), re.sub(p, \"-\"),",
+           "    /// and re.split (null when the pattern has groups).</summary>",
+           "    public static readonly (string Pattern, bool IgnoreCase, string Text, (int Start, int End, string?[] Groups)[] Matches, string Sub, string[]? Split)[] Regex =",
+           "    ["]
+    for pattern, ignore, text in REGEX:
+        flags = re.I if ignore else 0
+        rx = re.compile(pattern, flags)
+        matches = []
+        for m in rx.finditer(text):
+            groups = ", ".join("null" if g is None else cs(g) for g in m.groups())
+            matches.append(f"({u16(text, m.start())}, {u16(text, m.end())}, [{groups}])")
+        split = "null" if rx.groups else "[" + ", ".join(cs(p) for p in rx.split(text)) + "]"
+        out.append(f"        ({cs(pattern)}, {'true' if ignore else 'false'}, {cs(text)}, [{', '.join(matches)}], {cs(rx.sub('-', text))}, {split}),")
+    out += ["    ];", "",
+            "    /// <summary>Characters to try (every cased one, and some others).</summary>",
+            "    public static readonly int[] FoldCandidates =", "    ["]
+    candidates = fold_candidates()
+    for i in range(0, len(candidates), 16):
+        out.append("        " + " ".join(f"0x{c:X}," for c in candidates[i:i + 16]))
+    out += ["    ];", "",
+            "    /// <summary>A pattern, then which candidates re.fullmatch(pattern, c, re.I) accepts.</summary>",
+            "    public static readonly (string Pattern, int[] Matched)[] Fold =", "    ["]
+    for pattern in FOLD_PATTERNS:
+        rx = re.compile(pattern, re.I)
+        hit = [c for c in candidates if rx.fullmatch(chr(c))]
+        out.append(f"        ({cs(pattern)}, [{', '.join(f'0x{c:X}' for c in hit)}]),")
+    out += ["    ];", ""]
+    return out
+
+
+def more_lines() -> list[str]:
+    import hashlib
+    import tempfile
+    out = [
+        "// <auto-generated>",
+        f"// From Python {VERSION} by tools/gen/gen_expected.py. Don't edit by hand.",
+        "// </auto-generated>",
+        "#nullable enable",
+        "namespace PyCompat.Tests;",
+        "",
+        "internal static class PythonExpectedV03",
+        "{",
+        f"    public const string PythonVersion = \"{VERSION}\";",
+        "",
+        "    /// <summary>text, text.lower(), text.casefold(), and win_background's key(text): sha256(text.lower()) (null",
+        "    /// where encode() fails, as for a lone surrogate).</summary>",
+        "    public static readonly (string Text, string Lower, string CaseFold, string? Key)[] Texts =",
+        "    [",
+    ]
+    for text in TEXTS:
+        try:
+            key = cs(hashlib.sha256(text.lower().encode()).hexdigest()[:16])
+        except UnicodeEncodeError:
+            key = "null"
+        out.append(f"        ({cs(text)}, {cs(text.lower())}, {cs(text.casefold())}, {key}),")
+    out += ["    ];", "", "    public static readonly (string Text, string Repr)[] Reprs =", "    ["]
+    for text in REPRS:
+        out.append(f"        ({cs(text)}, {cs(repr(text))}),")
+    out += ["    ];", "",
+            "    /// <summary>bytes written to a file, then Path.read_text(encoding=\"utf-8\"), or \"ERR:\" and the message.</summary>",
+            "    public static readonly (byte[] Bytes, string Expected)[] ReadText =", "    ["]
+    with tempfile.TemporaryDirectory() as folder:
+        path = pathlib.Path(folder) / "t.txt"
+        for data in UTF8:
+            path.write_bytes(data)
+            result = attempt(lambda: path.read_text(encoding="utf-8"))
+            out.append(f"        ([{', '.join(f'0x{b:02X}' for b in data)}], {cs(result)}),")
+    out += ["    ];", ""]
+    out += regex_lines()
+    out += ["    /// <summary>template, then template.format(**sample) or \"Kind:message\".</summary>",
+            "    public static readonly (string Template, string Expected)[] Formats =", "    ["]
+    for template in FORMATS:
+        try:
+            result = "OK:" + template.format(**SAMPLE)
+        except Exception as error:  # noqa: BLE001 - the message is the expected value
+            result = f"{type(error).__name__}:{error}"
+        out.append(f"        ({cs(template)}, {cs(result)}),")
+    out += ["    ];", "}", ""]
+    return out
+
+
 if __name__ == "__main__":
     path = ROOT / "tests" / "PyCompat.Tests" / "Generated" / "PythonExpected.g.cs"
     write(path, lines())
+    print(f"{path.relative_to(ROOT)}: written")
+    path = ROOT / "tests" / "PyCompat.Tests" / "Generated" / "PythonExpectedV03.g.cs"
+    write(path, more_lines())
     print(f"{path.relative_to(ROOT)}: written")
