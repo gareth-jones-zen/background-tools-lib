@@ -1,0 +1,14 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!-- People First (MHR's HR system), read as you through its web app's own single sign-on: a hidden Edge takes the
+       web app's token, then HttpClient reads the API. GET only. Port of people-first-client (Python). -->
+  <PropertyGroup>
+    <TargetFramework>net11.0-windows</TargetFramework>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\EdgeDevTools\EdgeDevTools.csproj" />
+    <ProjectReference Include="..\WinBackground\WinBackground.csproj" />
+  </ItemGroup>
+  <ItemGroup>
+    <InternalsVisibleTo Include="PeopleFirstClient.Tests" />
+  </ItemGroup>
+</Project>

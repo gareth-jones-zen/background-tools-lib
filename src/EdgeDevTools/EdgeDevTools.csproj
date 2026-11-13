@@ -1,0 +1,13 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!-- The installed Microsoft Edge, driven over the DevTools protocol through a pipe: launch, pages, script, clicks,
+       request headers, a clean close. No Playwright and no Node, so it stays Native AOT clean and a few hundred KB.
+       Windows only (it starts Edge with CreateProcessW to hand it the pipe). -->
+  <PropertyGroup>
+    <TargetFramework>net11.0-windows</TargetFramework>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+  </PropertyGroup>
+  <ItemGroup>
+    <InternalsVisibleTo Include="EdgeDevTools.Tests" />
+    <InternalsVisibleTo Include="PeopleFirstClient.Tests" />
+  </ItemGroup>
+</Project>

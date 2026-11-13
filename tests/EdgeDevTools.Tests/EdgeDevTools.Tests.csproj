@@ -1,0 +1,19 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net11.0-windows</TargetFramework>
+    <IsTestProject>true</IsTestProject>
+    <OutputType>Exe</OutputType>
+    <NoWarn>$(NoWarn);xUnit1051</NoWarn>
+  </PropertyGroup>
+  <ItemGroup>
+    <PackageReference Include="xunit.v3" Version="4.0.3" />
+  </ItemGroup>
+  <ItemGroup>
+    <Using Include="Xunit" />
+  </ItemGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\EdgeDevTools\EdgeDevTools.csproj" />
+    <!-- The child process for "Edge dies with its parent", copied beside the tests. -->
+    <ProjectReference Include="..\EdgeHelper\EdgeHelper.csproj" />
+  </ItemGroup>
+</Project>

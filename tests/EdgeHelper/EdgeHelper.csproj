@@ -1,0 +1,14 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!-- A small console over EdgeDevTools and PeopleFirstClient: the Native AOT check (CI publishes it with AOT and
+       runs its smoke test), a child process for the "Edge dies with its parent" test, and the live read-only
+       comparison with Python. Not shipped. -->
+  <PropertyGroup>
+    <TargetFramework>net11.0-windows</TargetFramework>
+    <OutputType>Exe</OutputType>
+    <PublishAot>true</PublishAot>
+    <IsPackable>false</IsPackable>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\PeopleFirstClient\PeopleFirstClient.csproj" />
+  </ItemGroup>
+</Project>
