@@ -1,0 +1,16 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!-- A review queue a session reads: one JSON file of items that background tools leave for a person (or an
+       assistant's next session) to look at. Every write takes a lock between processes and replaces the file
+       atomically, so tools writing at the same moment never lose an item. Windows only, for the lock (WinBackground's
+       NamedLock). -->
+  <PropertyGroup>
+    <TargetFramework>net11.0-windows</TargetFramework>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\WinBackground\WinBackground.csproj" />
+    <ProjectReference Include="..\PyCompat\PyCompat.csproj" />
+  </ItemGroup>
+  <ItemGroup>
+    <InternalsVisibleTo Include="ReviewQueue.Tests" />
+  </ItemGroup>
+</Project>

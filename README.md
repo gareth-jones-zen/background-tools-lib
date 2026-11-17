@@ -14,8 +14,9 @@ Shared .NET libraries for a set of small personal background tools on Windows: w
 | `src/PyCompat` | The bits of Python's behaviour a port has to reproduce exactly, so its files and output match the Python tool's byte for byte: `str` methods, `json.dumps`, `pathlib`, `datetime`, `re`, `html` and `difflib` | Any (`net11.0`) |
 | `src/EdgeDevTools` | The installed Microsoft Edge driven over the DevTools protocol through a pipe, with no Playwright or Node: launch on a profile, pages, script, clicks, request headers, a clean close, and Edge ending with the process that started it. Also the Edge profile's lock key (the same as the Python tools') and Microsoft sign-in page recognition | Windows only (`net11.0-windows`) |
 | `src/PeopleFirstClient` | People First (MHR's HR system) read as you through its web app's own single sign-on: a hidden Edge takes the token, then HttpClient reads the API. GETs, and one POST that's never resent. A port of `people-first-client` | Windows only (`net11.0-windows`) |
+| `src/ReviewQueue` | A review queue a session reads: one JSON file where background tools leave items for a person (or an assistant's next session) to look at and clear, written under a lock between processes and replaced atomically, in a format a Python program can share byte for byte | Windows only (`net11.0-windows`) |
 
-Windows-only code lives in the Windows-only projects (`WinBackground`, `ClaudeHeadless`, and `EdgeDevTools` and `PeopleFirstClient`, which drive Edge on Windows), so `M365Graph` and `PyCompat` can later build for other platforms, and any of them could become a NuGet package.
+Windows-only code lives in the Windows-only projects (`WinBackground`, `ClaudeHeadless`, `ReviewQueue` (for its lock), and `EdgeDevTools` and `PeopleFirstClient`, which drive Edge on Windows), so `M365Graph` and `PyCompat` can later build for other platforms, and any of them could become a NuGet package.
 
 All the libraries are AOT- and trim-checked (`IsAotCompatible`), build with warnings as errors, and publish under Native AOT with no warnings.
 
@@ -279,6 +280,48 @@ foreach (var person in await api.TeamMembersAsync(me))
 
 **Before sharing a tool built on it:** the token is taken from People First's web app, and the tool isn't a registered API client. That's fine for reading your own permitted data on your own machine; distributing it to other people needs clearing with the HR system's owners and information security first (as the Python library's README says).
 
+### ReviewQueue
+
+A review queue a session reads: **one JSON file of items that background tools leave for a person to look at**, such as a question only they can answer, or a change a tool made that they should hear about. Whatever starts their session (a script, an assistant) shows the items and clears them once dealt with. Tools add to it; nothing needs to run in between.
+
+```csharp
+using ReviewQueue;
+
+var queue = new QueueFile(@"C:\Users\you\AppData\Local\my-tools\review.json");
+queue.Add("my-tool", "added", new JsonObject { ["title"] = "Ben annual leave 24/12 to 31/12 added", ["start"] = "2026-12-24" });
+queue.Replace("my-other-tool", [new ReviewItem("question", new JsonObject { ["title"] = "Thu 26 Nov: book it?" })]);   // its current state
+queue.Update("my-tool", new JsonObject { ["start"] = "2026-12-24" }, new JsonObject { ["seen"] = true });
+var waiting = queue.Items("my-tool");
+queue.Done([waiting[0]["id"]!.GetValue<string>()]);   // or a source name, for all of it
+```
+
+```json
+{"items": [{"id": "a7910e09", "source": "my-tool", "type": "added", "added": "2026-11-17T09:30:05", "title": "...", "start": "2026-12-24"}]}
+```
+
+- **`Add`** keeps an item once: the same source, type and fields give the same id, so a tool that reports the same thing twice doesn't queue it twice. **`Replace`** is for a source whose items are its current state (a run's open questions): its old items go and these take their place, all with the same added time; an empty list clears it. **`Update`** sets fields on the matching items (a missing field matches null) without changing their ids. **`Items`** and **`Done`** read and clear.
+- **Every write takes a lock between processes and replaces the file atomically**: a temporary file beside it (`{name}.{pid}.tmp`), then one move over it, so tools writing at the same moment never lose an item and a reader never sees half a file. The lock is a `NamedLock` (`Local\{name}`, waiting up to 60 seconds). By default it's named from the file's folder and name, lower-cased (`...\my-tools\review.json` is `my-tools-review`); or give one. A Python program that takes the same mutex (win-background's `exclusive(name)`) shares it.
+- **An item's id** is the first 8 hex characters of the SHA-256 of all its fields but `id` and `added`, as Python's `json.dumps(fields, sort_keys=True)` writes them: `", "` and `": "` between, everything outside printable ASCII as `\uXXXX` (a character beyond U+FFFF as its two surrogates), keys in code point order at every level. So the same item gets the same id from either language. `QueueFile.Id(item)` gives it.
+- **The file** is `json.dumps(data, indent=2, ensure_ascii=False)` as Python writes it in text mode on Windows: UTF-8 with no byte order mark, CRLF line ends, no newline at the end, characters kept as they are. An added item's keys are `id, source, type, added`, then its fields; a replaced one's are `id, added, source, type`, then its fields. Other top-level fields are kept.
+- **A file that isn't JSON** is renamed `{name}.broken-{yyyyMMdd-HHmmss}{extension}` beside it, for a person to look at, and the queue starts empty. **JSON that isn't a queue** (no `items` list of objects) is an `InvalidDataException`, and nothing is written. Text that isn't UTF-8 is a `DecoderFallbackException`, also writing nothing. (JSON with `NaN` or `Infinity` in it counts as broken here, though Python reads it.)
+- **`id`, `source`, `type` and `added` are the queue's**, so an item's own fields can't use them (`ArgumentException`).
+
+**`ReviewSettings`** is a tool's optional `[review]` settings section, checked strictly (an unknown key, a value that isn't text, or an empty one is a `FormatException` naming the settings file), with the file path made full by the tool's own path rules:
+
+```toml
+[review]                                      # no section: the tool queues nothing
+file = "%LOCALAPPDATA%/my-tools/review.json"
+source = "my-tool"
+# lock = "my-tools-review"                    # optional: the default is the folder and file name
+```
+
+```csharp
+var review = raw.TryGetValue("review", out var section) ? ReviewSettings.Read(section, settingsPath, MyPathRules) : null;
+review?.Open().Add(review.Source, "added", fields);
+```
+
+The tests check ids and the file's bytes against values computed by Python (pinned, so they run on CI) and, where Python and a win-background checkout are found (`REVIEW_QUEUE_PYTHON`, `WIN_BACKGROUND_SRC`, or the usual places), against a Python implementation of the same format (`tests/ReviewQueue.Tests/reference_queue.py`): each reads and rewrites the other's file byte for byte, they take each other's lock, and they write at the same moment without losing an item.
+
 ## Using it from a tool
 
 Tools reference these libraries as a **sibling checkout**: clone this repo next to the tool's repo, and add project references.
@@ -310,7 +353,7 @@ dotnet test -c Release
 
 `tests/M365Graph.Tests` has one live test against the real Graph, skipped unless `M365GRAPH_LIVE_CACHE` names a token cache file (and `M365GRAPH_LIVE_TENANT` its tenant). It copies the file first and works on the copy, silently only, and reads only `/me`.
 
-`tests/LockHelper` is a small console used by the lock and `Shell.Run` tests as another process. CI also publishes it with Native AOT and runs `async` (the locks) and `aot-smoke` (the PyCompat, WinBackground and M365Graph additions of 13 Nov 2026, with a fake Graph handler and no network) under AOT.
+`tests/LockHelper` is a small console used by the lock and `Shell.Run` tests as another process. CI also publishes it with Native AOT and runs `async` (the locks) and `aot-smoke` (the PyCompat, WinBackground and M365Graph additions of 13 Nov 2026, with a fake Graph handler and no network, and ReviewQueue on a temporary folder) under AOT.
 
 `tests/PyCompat.Tests/MergedTests.cs` holds the ports' tests for the merged helpers and the checks against the Python-generated tables; one compares `PyPath.Resolve` with `pathlib` and is skipped where `python` isn't on the `PATH`.
 

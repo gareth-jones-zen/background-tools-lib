@@ -3,6 +3,7 @@ using System.Text;
 using System.Text.Json.Nodes;
 using M365Graph;
 using PyCompat;
+using ReviewQueue;
 using WinBackground;
 
 /// <summary>LockHelper aot-smoke: the 13 Nov 2026 additions run once each under Native AOT (the regex interpreter,
@@ -42,6 +43,22 @@ internal static class AotSmoke
         var reply = await graph.SendRawAsync(HttpMethod.Post, "/x", Encoding.UTF8.GetBytes("<p/>"), "text/html", GraphRetryPolicy.Write);
         Check(reply.Status == HttpStatusCode.Created && reply.Body.Length == 3, "SendRawAsync");
         Check((string?)(await graph.GetAsync("/me"))["id"] == "1", "GetAsync");
+
+        // ReviewQueue: an id as Python's, a write through the lock, and the file read back.
+        var folder = Directory.CreateTempSubdirectory("aot-review-").FullName;
+        try
+        {
+            var queue = new QueueFile(Path.Combine(folder, "queue.json"), "aot-review-" + Environment.ProcessId);
+            queue.Replace("ev", [new ReviewItem("question", new JsonObject { ["title"] = "Thu 26 Nov: Travel block says EV but work plan says remote. Book EV?" })]);
+            var added = queue.Add("s", "t", new JsonObject { ["title"] = "é" });
+            Check(queue.Items("ev").Single()["id"]!.GetValue<string>() == "a0d27046" && queue.Items().Count == 2
+                  && queue.Update("s", new JsonObject { ["title"] = "é" }, new JsonObject { ["seen"] = true }) == 1
+                  && queue.Done([added]) == 1, "ReviewQueue");
+        }
+        finally
+        {
+            Directory.Delete(folder, true);
+        }
 
         if (problems.Count == 0)
         {
