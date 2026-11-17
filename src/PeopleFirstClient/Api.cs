@@ -3,11 +3,13 @@ using System.Net.Http.Headers;
 using System.Net.Sockets;
 using System.Text;
 using System.Text.Json;
+using System.Text.Json.Nodes;
 
 namespace PeopleFirstClient;
 
 /// <summary>
-/// People First's REST API (<c>/api/v1</c>), as the signed-in person. <b>Only GETs: nothing here writes.</b>
+/// People First's REST API (<c>/api/v1</c>), as the signed-in person. GETs, and one way to write,
+/// <see cref="PostAsync"/>, which is never resent.
 /// <para>Every call sends the web app's own <c>Authorization</c> header, <c>TenantCode</c>, an empty
 /// <c>EnvironmentCode</c> and <c>Accept: application/json</c>, as the web app does. No cookies are needed, so the
 /// browser is closed before any of these run.</para>
@@ -55,7 +57,7 @@ public sealed class Api : IDisposable
         using var response = await http.SendAsync(request, cancellationToken).ConfigureAwait(false);
         var status = (int)response.StatusCode;
         if (status is < 200 or > 299)
-            throw new PeopleFirstException($"People First answered {status} to {path.Split('?')[0]}");
+            throw new PeopleFirstException($"People First answered {status} to {path.Split('?')[0]}") { Status = status };
         return await response.Content.ReadAsByteArrayAsync(cancellationToken).ConfigureAwait(false);
     }
 
@@ -66,6 +68,96 @@ public sealed class Api : IDisposable
         using var document = JsonDocument.Parse(body);
         return document.RootElement.Clone();
     }
+
+    /// <summary>A POST under /api/v1 with a JSON body (<c>Content-Type: application/json</c>, and the same headers as
+    /// a GET); the reply as JSON, or an empty object if it has no body.
+    /// <para><b>A write that may have reached People First is never resent: there's no retry at all.</b> What a
+    /// failure means, so the caller can read back rather than guess:</para>
+    /// <list type="bullet">
+    /// <item>4xx: People First refused it, so nothing happened. A PeopleFirstException with <c>Status</c>.</item>
+    /// <item>the name didn't resolve, no connection opened, or TLS failed: never sent. A PeopleFirstException with
+    /// <c>NeverSent</c>.</item>
+    /// <item>a timeout, a dropped connection, a 5xx, or a 2xx whose reply can't be read: it may or may not have
+    /// happened. A <see cref="PeopleFirstDeliveryUnknownException"/>.</item>
+    /// </list>
+    /// <para>Messages name the path but not its query, as a GET's do. Cancelling through
+    /// <paramref name="cancellationToken"/> throws OperationCanceledException, and the write may have happened.</para></summary>
+    public async Task<JsonElement> PostAsync(string path, JsonNode body, CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(path);
+        ArgumentNullException.ThrowIfNull(body);
+        var bare = path.Split('?')[0];
+        using var request = new HttpRequestMessage(HttpMethod.Post, Root + path);
+        foreach (var (name, value) in Headers)
+            request.Headers.TryAddWithoutValidation(name, value);
+        request.Content = new ByteArrayContent(Encoding.UTF8.GetBytes(body.ToJsonString()));
+        request.Content.Headers.ContentType = new MediaTypeHeaderValue("application/json");
+        int status;
+        byte[] reply;
+        try
+        {
+            using var response = await http.SendAsync(request, cancellationToken).ConfigureAwait(false);
+            status = (int)response.StatusCode;
+            reply = await response.Content.ReadAsByteArrayAsync(cancellationToken).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception error) when (NeverSentError(error))
+        {
+            throw new PeopleFirstException($"Couldn't reach People First to POST {bare}; nothing was sent.", error) { NeverSent = true };
+        }
+        catch (Exception error) when (error is HttpRequestException or IOException or OperationCanceledException)
+        {
+            // A timeout (HttpClient's is a TaskCanceledException), a reset, a connection dropped mid-reply.
+            throw new PeopleFirstDeliveryUnknownException(
+                $"POST {bare} to People First may or may not have happened: {Describe(error)}. It wasn't resent.", error);
+        }
+        if (status is >= 500)
+            throw new PeopleFirstDeliveryUnknownException(
+                $"People First answered {status} to POST {bare}: it may or may not have happened. It wasn't resent.") { Status = status };
+        if (status is < 200 or > 299)
+            throw new PeopleFirstException($"People First answered {status} to POST {bare}" + ErrorText(reply)) { Status = status };
+        if (reply.Length == 0)
+            return EmptyObject();
+        try
+        {
+            using var document = JsonDocument.Parse(reply);
+            return document.RootElement.Clone();
+        }
+        catch (JsonException error)
+        {
+            throw new PeopleFirstDeliveryUnknownException(
+                $"People First answered {status} to POST {bare}, but its reply isn't JSON. It wasn't resent.", error) { Status = status };
+        }
+    }
+
+    /// <summary>The start of a refusal's reply (People First explains a 4xx in it), for the message.</summary>
+    private static string ErrorText(byte[] reply)
+    {
+        var text = Encoding.UTF8.GetString(reply).Trim();
+        return text.Length == 0 ? "" : ": " + (text.Length > 400 ? text[..400] + "…" : text);
+    }
+
+    /// <summary>Whether a failed request certainly never reached the server: the name didn't resolve, no connection
+    /// opened, or TLS failed before anything was sent (as M365Graph's Net.NeverSent, which this doesn't reference).
+    /// Read from HttpRequestException.HttpRequestError, which the IPv4-first connect sets too.</summary>
+    internal static bool NeverSentError(Exception error)
+    {
+        for (var e = error; e is not null; e = e.InnerException)
+            if (e is HttpRequestException { HttpRequestError: HttpRequestError.NameResolutionError or HttpRequestError.ConnectionError
+                    or HttpRequestError.SecureConnectionError })
+                return true;
+        return false;
+    }
+
+    private static string Describe(Exception error) => error switch
+    {
+        TaskCanceledException { InnerException: TimeoutException } => "it timed out",
+        OperationCanceledException => "it was cut short",
+        _ => error.Message.Split('\n')[0],
+    };
 
     /// <summary>Your own person id. The profile endpoint has it, under one name or another.</summary>
     public async Task<string> MeAsync(CancellationToken cancellationToken = default)
@@ -266,7 +358,8 @@ public sealed class Api : IDisposable
                 throw;
             }
         }
-        throw new HttpRequestException($"Couldn't connect to {endpoint.Host}:{endpoint.Port} on any of its {addresses.Length} addresses.", last);
+        throw new HttpRequestException(HttpRequestError.ConnectionError,
+            $"Couldn't connect to {endpoint.Host}:{endpoint.Port} on any of its {addresses.Length} addresses.", last);
     }
 
     public void Dispose()
