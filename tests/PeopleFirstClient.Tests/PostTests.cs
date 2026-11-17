@@ -70,7 +70,7 @@ public class PostTests
         Assert.IsNotType<PeopleFirstDeliveryUnknownException>(error);
         Assert.Equal(403, error.Status);
         Assert.False(error.NeverSent);
-        Assert.Equal("People First answered 403 to POST /hrm/absences/approved", error.Message);
+        Assert.Equal("People First answered 403 to POST /hrm/absences/approved: {}", error.Message);
         Assert.Single(handler.Sent);
     }
 
