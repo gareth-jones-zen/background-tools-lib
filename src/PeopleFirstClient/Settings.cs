@@ -2,7 +2,7 @@ using System.Text.RegularExpressions;
 
 namespace PeopleFirstClient;
 
-/// <summary>Something went wrong reading People First.</summary>
+/// <summary>Something went wrong reading (or writing to) People First.</summary>
 public class PeopleFirstException : Exception
 {
     public PeopleFirstException(string message) : base(message)
@@ -10,6 +10,27 @@ public class PeopleFirstException : Exception
     }
 
     public PeopleFirstException(string message, Exception inner) : base(message, inner)
+    {
+    }
+
+    /// <summary>People First's answer, when it gave one outside 200-299 (or a 2xx whose reply couldn't be read).</summary>
+    public int? Status { get; init; }
+
+    /// <summary>A write that certainly never reached People First: the name didn't resolve, no connection opened, or
+    /// TLS failed before anything was sent. Nothing happened there.</summary>
+    public bool NeverSent { get; init; }
+}
+
+/// <summary>A write that may have reached People First failed before its answer was read: a timeout, a dropped
+/// connection, a 5xx, or a reply that couldn't be read. <b>It may or may not have happened, and it isn't resent</b>:
+/// read back to see.</summary>
+public sealed class PeopleFirstDeliveryUnknownException : PeopleFirstException
+{
+    public PeopleFirstDeliveryUnknownException(string message) : base(message)
+    {
+    }
+
+    public PeopleFirstDeliveryUnknownException(string message, Exception inner) : base(message, inner)
     {
     }
 }
