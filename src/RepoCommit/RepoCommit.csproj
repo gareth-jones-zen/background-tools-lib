@@ -1,0 +1,8 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!-- Committing exactly the files a tool wrote into a git repository, and nothing else, then pushing. It runs git
+       itself as a child process (no LibGit2Sharp), so it's AOT-safe and sees the repository as git does. Not
+       Windows-specific: it builds for any platform, and finds git.exe on the PATH on Windows. -->
+  <ItemGroup>
+    <InternalsVisibleTo Include="RepoCommit.Tests" />
+  </ItemGroup>
+</Project>
