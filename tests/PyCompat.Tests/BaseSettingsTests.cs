@@ -84,6 +84,20 @@ public sealed class BaseSettingsTests : IDisposable
     }
 
     [Fact]
+    public void A_table_applies_only_to_a_tool_that_has_the_section()
+    {
+        var without = Read("base = \"base-config.toml\"
+", "review", "git", "tenant");
+        Assert.False(without.Raw.ContainsKey("review"));
+        Assert.False(without.Raw.ContainsKey("git"));
+        Assert.Equal("contoso", without.Raw["tenant"]);
+        var bare = Read("base = \"base-config.toml\"
+[git]
+", "git");
+        Assert.Equal("..", ((TomlTable)bare.Raw["git"])["repo"]);
+    }
+
+    [Fact]
     public void Paths_are_variables_before_the_environment()
     {
         var read = Read("base = \"base-config.toml\"\n", "msal_cache");

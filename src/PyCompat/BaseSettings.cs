@@ -15,8 +15,10 @@ public sealed record SettingsWithBase(TomlTable Raw, Func<string, string?> Env, 
 /// lets the tool say <c>log_file = "%EA_LOCAL%/x.log"</c>. They're looked up before the environment, and may use the
 /// environment and each other.</item>
 /// <item><b>Each of the base's other settings that the tool knows</b> (its <c>known</c> keys) <b>and hasn't set itself</b>
-/// is added. A table both set (<c>[git]</c>, <c>[review]</c>) is merged key by key, the tool's own keys winning. Base
-/// settings the tool doesn't know are left out, so one base serves tools that use different parts of it.</item>
+/// is added. Base settings the tool doesn't know are left out, so one base serves tools that use different parts of it.</item>
+/// <item><b>A table (<c>[git]</c>, <c>[review]</c>) applies only to a tool that has that section itself</b>, even empty: the
+/// base's keys fill it in, the tool's own winning. So a tool that keeps no review items isn't handed a [review] it
+/// would then have to complete, and the section in the tool's file says it takes part.</item>
 /// </list>
 /// The base is read as strictly as any settings file (a key given twice is an error), and can't name a base of its
 /// own. The tool's file is still checked strictly by the tool: the <c>base</c> key itself is taken out first.</summary>
@@ -71,7 +73,10 @@ public static class BaseSettings
             if (key == PathsKey || !knownKeys.Contains(key))
                 continue;
             if (!raw.TryGetValue(key, out var own))
-                raw[key] = Copy(value);
+            {
+                if (value is not TomlTable)   // a table only for a tool that has the section itself: see the summary
+                    raw[key] = Copy(value);
+            }
             else if (own is TomlTable mine && value is TomlTable theirs)
                 Merge(mine, theirs);
         }
