@@ -31,6 +31,13 @@ public interface ITask
 
     /// <summary>Null if there's no task; otherwise state, command, last_run, last_result and next_run.</summary>
     IReadOnlyDictionary<string, string>? Status();
+
+    /// <summary>Stop the task, wait for its process to exit, and start it again: how a watcher picks up a new
+    /// version after an upgrade. False if there's no task.
+    /// <para>Added after ITask was first published (v0.4, 17 Nov 2026), so it has a default, Stop then Start, which
+    /// a test fake gets for free. ScheduledTask's own starts nothing if the old process is still running after the
+    /// wait, so the new one never meets the old one's lock and exits.</para></summary>
+    bool Restart() => Stop() && Start();
 }
 
 /// <summary>Starting a tool at logon through Windows Task Scheduler, by PowerShell's ScheduledTasks module (the
@@ -153,6 +160,29 @@ public sealed class ScheduledTask(string name, string description = "", IReadOnl
         if (done.ExitCode != 0)
             throw new InvalidOperationException($"Couldn't stop the task: {Clip(done)}");
         return done.StandardOutput.Contains("stopped");
+    }
+
+    /// <summary>Stop the task, wait (up to 30 seconds) for its process to exit, and start it again. Never with
+    /// `schtasks /End` then `/Run`: the stop returns before the process exits, so the new process finds the old one
+    /// still holding its lock and quits, and nothing runs (three watchers, 11 Nov 2026). If the old process is still
+    /// there after the wait, nothing is started and this throws: the old version carries on running.</summary>
+    public bool Restart()
+    {
+        var done = Shell.PowerShell($$"""
+            {{StopAndWait()}}
+            if ($existing) {
+              if ($taskArgs -and ({{AliveFilter}})) { 'still-running'; exit 0 }
+              Start-ScheduledTask {{Which}}
+              'restarted'
+            }
+            exit 0
+
+            """);
+        if (done.ExitCode != 0)
+            throw new InvalidOperationException($"Couldn't restart the task: {Clip(done)}");
+        if (done.StandardOutput.Contains("still-running"))
+            throw new InvalidOperationException("The task's process was still running 30 seconds after it was stopped, so nothing was started; it carries on as it was. Try again, or end the process in Task Manager.");
+        return done.StandardOutput.Contains("restarted");
     }
 
     public bool Start()

@@ -47,4 +47,26 @@ public class V03Tests
         Assert.Throws<NotSupportedException>(() => task.Enable("x.exe", [], null, new TaskSchedule { AtLogon = false, DailyAt = "07:30" }));
         Assert.Throws<NotSupportedException>(() => task.Start());
     }
+
+    private sealed class StartingFake(bool exists) : ITask
+    {
+        public List<string> Calls { get; } = [];
+        public string Name => "fake";
+        public string Enable(string exe, IReadOnlyList<string> args, string? workingDir) => exe;
+        public bool Disable() => exists;
+        public bool Stop() { Calls.Add("stop"); return exists; }
+        public bool Start() { Calls.Add("start"); return exists; }
+        public IReadOnlyDictionary<string, string>? Status() => null;
+    }
+
+    [Fact]
+    public void Restart_by_default_stops_then_starts_and_does_nothing_more_without_a_task()
+    {
+        ITask task = new StartingFake(true);
+        Assert.True(task.Restart());
+        Assert.Equal(["stop", "start"], ((StartingFake)task).Calls);
+        ITask none = new StartingFake(false);
+        Assert.False(none.Restart());
+        Assert.Equal(["stop"], ((StartingFake)none).Calls);
+    }
 }
