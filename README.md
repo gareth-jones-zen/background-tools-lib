@@ -15,8 +15,9 @@ Shared .NET libraries for a set of small personal background tools on Windows: w
 | `src/EdgeDevTools` | The installed Microsoft Edge driven over the DevTools protocol through a pipe, with no Playwright or Node: launch on a profile, pages, script, clicks, request headers, a clean close, and Edge ending with the process that started it. Also the Edge profile's lock key (the same as the Python tools') and Microsoft sign-in page recognition | Windows only (`net11.0-windows`) |
 | `src/PeopleFirstClient` | People First (MHR's HR system) read as you through its web app's own single sign-on: a hidden Edge takes the token, then HttpClient reads the API. GETs, and one POST that's never resent. A port of `people-first-client` | Windows only (`net11.0-windows`) |
 | `src/ReviewQueue` | A review queue a session reads: one JSON file where background tools leave items for a person (or an assistant's next session) to look at and clear, written under a lock between processes and replaced atomically, in a format a Python program can share byte for byte | Windows only (`net11.0-windows`) |
+| `src/RepoCommit` | Committing exactly the files a tool wrote into a git repository, and nothing else, then pushing: git run as a child process, every pathspec literal, renames, another git's `index.lock` waited for, a push failure reported rather than thrown. Also a tool's `[git]` settings | Any (`net11.0`) |
 
-Windows-only code lives in the Windows-only projects (`WinBackground`, `ClaudeHeadless`, `ReviewQueue` (for its lock), and `EdgeDevTools` and `PeopleFirstClient`, which drive Edge on Windows), so `M365Graph` and `PyCompat` can later build for other platforms, and any of them could become a NuGet package.
+Windows-only code lives in the Windows-only projects (`WinBackground`, `ClaudeHeadless`, `ReviewQueue` (for its lock), and `EdgeDevTools` and `PeopleFirstClient`, which drive Edge on Windows), so `M365Graph`, `PyCompat` and `RepoCommit` can later build for other platforms, and any of them could become a NuGet package.
 
 All the libraries are AOT- and trim-checked (`IsAotCompatible`), build with warnings as errors, and publish under Native AOT with no warnings.
 
@@ -322,6 +323,54 @@ review?.Open().Add(review.Source, "added", fields);
 
 The tests check ids and the file's bytes against values computed by Python (pinned, so they run on CI) and, where Python and a win-background checkout are found (`REVIEW_QUEUE_PYTHON`, `WIN_BACKGROUND_SRC`, or the usual places), against a Python implementation of the same format (`tests/ReviewQueue.Tests/reference_queue.py`): each reads and rewrites the other's file byte for byte, they take each other's lock, and they write at the same moment without losing an item.
 
+### RepoCommit
+
+**Commits exactly the files a tool wrote into a git repository, and nothing else**, then optionally pushes. For a tool that writes into a repository someone also works in by hand: whatever else is changed or staged there is left exactly as it was.
+
+```csharp
+using RepoCommit;
+
+var git = new Committer(@"C:
+otes", log.Info);   // the repository's top, or a folder inside it
+var result = git.Commit("Ingest exco-notes 2026-10-23", ["reports/exco-notes/2026-10-23.md"],
+    renames: [new Rename("preps/2026-10-01.md", "preps/archive/2026-10/2026-10-01.md")],
+    trailers: ["Co-Authored-By: Claude <noreply@anthropic.com>"], push: true);
+if (result.Error is not null) { /* nothing committed: tell someone */ }
+if (result.PushError is not null) { /* committed, not pushed */ }
+
+var changed = git.Changed(paths);   // which of these git sees as changed, in git status's order
+var tracked = git.Tracked(paths);   // which of these are in the index
+var message = Committer.Message("Subject", "Body.", ["Co-Authored-By: ..."]);
+```
+
+- **Only the given paths, and both sides of each rename, are staged and committed**: `git add -A` and then `git commit`, each with exactly those paths as pathspecs (read from stdin, so there's no limit on how many), and only those of them git sees as changed. `git commit` with paths commits only those paths, even when something else is staged.
+- **Every pathspec is literal** (`--literal-pathspecs`), so a file named `[ab].md` is only that file, never a pattern.
+- **A path outside the repository**, the top itself, or anything in `.git` refuses the whole commit: nothing is staged. Paths may be relative to the folder given, or in full.
+- **Nothing changed in the given paths**: no commit, no error (`CommitResult.Nothing`), and "git: nothing to commit" in the log.
+- **Another git holding the index** (`index.lock`, say a person committing at the same moment): the command is tried again, every half second for up to ten seconds by default, then reported.
+- **A push** (`git push -q`, to the branch's upstream) that fails is reported in `PushError` and the log, never thrown; the commit stays. git is never left waiting for a person: `GIT_TERMINAL_PROMPT=0`, and no optional index lock while reading status (`GIT_OPTIONAL_LOCKS=0`).
+- **git's own failures never throw from `Commit`**: they're in `Error` and the log. `Changed` and `Tracked` throw `GitException` (or `InvalidOperationException` for a folder that isn't in a repository).
+- **The log holds no file contents and no commit messages**: counts, the commit id, and git's own error lines, each starting `git: `.
+- **git is found on the PATH by its full path**, never by bare name (which would also look in the tool's own folder and the current folder first). Each command has a timeout: two minutes, five for the push.
+
+**`GitSettings`** is a tool's optional `[git]` settings section, checked strictly (an unknown key or a value of the wrong kind is a `FormatException` naming the settings file), with the repository path made full by the tool's own path rules. A JSON object works the same way, for a tool whose settings are JSON (give the name the errors should use, as `"\"git\""`).
+
+```toml
+[git]                                     # no section: the tool commits nothing
+repo = ".."                               # the repository: its top, or a folder in it
+commit = true                             # optional (default true): false keeps the section but commits nothing
+push = true                               # optional (default false): push after each commit
+trailers = ["Co-Authored-By: Claude <noreply@anthropic.com>"]   # optional: the message's last paragraph
+```
+
+```csharp
+var git = raw.TryGetValue("git", out var section) ? GitSettings.Read(section, settingsPath, MyPathRules) : null;
+if (git is { Commit: true })
+    git.Open(log).Commit(message, written, trailers: git.Trailers, push: git.Push);
+```
+
+The tests run real git on temporary repositories: other changes left untouched, a path outside refused, renames, deletions, nothing to commit, odd names, 250 paths at once, a folder inside the repository, `index.lock` waited for and given up on, and a push to a local bare remote (and a failed one).
+
 ## Using it from a tool
 
 Tools reference these libraries as a **sibling checkout**: clone this repo next to the tool's repo, and add project references.
@@ -353,7 +402,7 @@ dotnet test -c Release
 
 `tests/M365Graph.Tests` has one live test against the real Graph, skipped unless `M365GRAPH_LIVE_CACHE` names a token cache file (and `M365GRAPH_LIVE_TENANT` its tenant). It copies the file first and works on the copy, silently only, and reads only `/me`.
 
-`tests/LockHelper` is a small console used by the lock and `Shell.Run` tests as another process. CI also publishes it with Native AOT and runs `async` (the locks) and `aot-smoke` (the PyCompat, WinBackground and M365Graph additions of 13 Nov 2026, with a fake Graph handler and no network, and ReviewQueue on a temporary folder) under AOT.
+`tests/LockHelper` is a small console used by the lock and `Shell.Run` tests as another process. CI also publishes it with Native AOT and runs `async` (the locks) and `aot-smoke` (the PyCompat, WinBackground and M365Graph additions of 13 Nov 2026, with a fake Graph handler and no network, ReviewQueue on a temporary folder, and RepoCommit on a temporary repository) under AOT.
 
 `tests/PyCompat.Tests/MergedTests.cs` holds the ports' tests for the merged helpers and the checks against the Python-generated tables; one compares `PyPath.Resolve` with `pathlib` and is skipped where `python` isn't on the `PATH`.
 

@@ -3,12 +3,13 @@ using System.Text;
 using System.Text.Json.Nodes;
 using M365Graph;
 using PyCompat;
+using RepoCommit;
 using ReviewQueue;
 using WinBackground;
 
 /// <summary>LockHelper aot-smoke: the 13 Nov 2026 additions run once each under Native AOT (the regex interpreter,
 /// the kernel32 imports behind PyPath.Resolve, the generated entity table, a raw Graph call over a fake handler,
-/// Shell.Run with UTF-8 stdin). Prints "ok", or what went wrong and exits 1. No network: the handler is fake.</summary>
+/// Shell.Run with UTF-8 stdin), and ReviewQueue and RepoCommit (git on the PATH). Prints "ok", or what went wrong and exits 1. No network: the handler is fake.</summary>
 internal static class AotSmoke
 {
     public static async Task<int> Run()
@@ -58,6 +59,27 @@ internal static class AotSmoke
         finally
         {
             Directory.Delete(folder, true);
+        }
+
+        // RepoCommit: [git] read from JSON, and one file committed in a new repository (git on the PATH, as on CI).
+        var repo = Directory.CreateTempSubdirectory("aot-git-").FullName;
+        try
+        {
+            var settings = GitSettings.Read(JsonNode.Parse("{\"repo\": \".\", \"trailers\": [\"Co-Authored-By: X <x@example.com>\"]}"),
+                "x.json", p => Path.Combine(repo, p), "\"git\"");
+            foreach (var args in new[] { "init -q -b main", "config user.name T", "config user.email t@example.com", "config commit.gpgsign false" })
+                Shell.Run("git", args.Split(' '), TimeSpan.FromSeconds(60), workingDirectory: repo);
+            File.WriteAllText(Path.Combine(repo, "a.md"), "a");
+            File.WriteAllText(Path.Combine(repo, "b.md"), "b");
+            var committed = settings.Open().Commit("A", ["a.md"], trailers: settings.Trailers);
+            Check(committed.Committed && committed.Paths.SequenceEqual(["a.md"])
+                  && settings.Open().Changed(["a.md", "b.md"]).SequenceEqual(["b.md"]), "RepoCommit");
+        }
+        finally
+        {
+            foreach (var file in Directory.EnumerateFiles(repo, "*", SearchOption.AllDirectories))
+                File.SetAttributes(file, FileAttributes.Normal);
+            Directory.Delete(repo, true);
         }
 
         if (problems.Count == 0)

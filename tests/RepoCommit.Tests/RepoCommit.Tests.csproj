@@ -1,0 +1,17 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <IsTestProject>true</IsTestProject>
+    <OutputType>Exe</OutputType>
+  </PropertyGroup>
+  <ItemGroup>
+    <PackageReference Include="xunit.v3" Version="4.0.3" />
+  </ItemGroup>
+  <ItemGroup>
+    <Using Include="Xunit" />
+  </ItemGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\RepoCommit\RepoCommit.csproj" />
+    <!-- PyToml, to read [git] sections as the tools read their settings. -->
+    <ProjectReference Include="..\..\src\PyCompat\PyCompat.csproj" />
+  </ItemGroup>
+</Project>
