@@ -98,7 +98,7 @@ public sealed class Api : IDisposable
         {
             using var response = await http.SendAsync(request, cancellationToken).ConfigureAwait(false);
             status = (int)response.StatusCode;
-            reply = status is >= 200 and <= 299 ? await response.Content.ReadAsByteArrayAsync(cancellationToken).ConfigureAwait(false) : [];
+            reply = await response.Content.ReadAsByteArrayAsync(cancellationToken).ConfigureAwait(false);
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
@@ -118,7 +118,7 @@ public sealed class Api : IDisposable
             throw new PeopleFirstDeliveryUnknownException(
                 $"People First answered {status} to POST {bare}: it may or may not have happened. It wasn't resent.") { Status = status };
         if (status is < 200 or > 299)
-            throw new PeopleFirstException($"People First answered {status} to POST {bare}") { Status = status };
+            throw new PeopleFirstException($"People First answered {status} to POST {bare}" + ErrorText(reply)) { Status = status };
         if (reply.Length == 0)
             return EmptyObject();
         try
@@ -131,6 +131,13 @@ public sealed class Api : IDisposable
             throw new PeopleFirstDeliveryUnknownException(
                 $"People First answered {status} to POST {bare}, but its reply isn't JSON. It wasn't resent.", error) { Status = status };
         }
+    }
+
+    /// <summary>The start of a refusal's reply (People First explains a 4xx in it), for the message.</summary>
+    private static string ErrorText(byte[] reply)
+    {
+        var text = Encoding.UTF8.GetString(reply).Trim();
+        return text.Length == 0 ? "" : ": " + (text.Length > 400 ? text[..400] + "…" : text);
     }
 
     /// <summary>Whether a failed request certainly never reached the server: the name didn't resolve, no connection
