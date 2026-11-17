@@ -74,26 +74,23 @@ public sealed class BaseSettingsTests : IDisposable
     [Fact]
     public void Tables_merge_key_by_key()
     {
-        var read = Read("base = \"base-config.toml\"\n[review]\nsource = \"ev\"\nlock = \"mine\"\n", "review", "git");
+        var read = Read("base = \"base-config.toml\"\n[review]\nsource = \"ev\"\nlock = \"mine\"\n[git]\n", "review", "git");
         var review = (TomlTable)read.Raw["review"];
         Assert.Equal(("ev", "mine", "%ROOT%/pending.json"), ((string)review["source"], (string)review["lock"], (string)review["file"]));
         var git = (TomlTable)read.Raw["git"];
         Assert.Equal(true, git["push"]);
         ((TomlTable)read.Raw["git"])["push"] = false;   // a copy: the next read still sees the base's
-        Assert.Equal(true, ((TomlTable)Read("base = \"base-config.toml\"\n", "git").Raw["git"])["push"]);
+        Assert.Equal(true, ((TomlTable)Read("base = \"base-config.toml\"\n[git]\n", "git").Raw["git"])["push"]);
     }
 
     [Fact]
     public void A_table_applies_only_to_a_tool_that_has_the_section()
     {
-        var without = Read("base = \"base-config.toml\"
-", "review", "git", "tenant");
+        var without = Read("base = \"base-config.toml\"\n", "review", "git", "tenant");
         Assert.False(without.Raw.ContainsKey("review"));
         Assert.False(without.Raw.ContainsKey("git"));
         Assert.Equal("contoso", without.Raw["tenant"]);
-        var bare = Read("base = \"base-config.toml\"
-[git]
-", "git");
+        var bare = Read("base = \"base-config.toml\"\n[git]\n", "git");
         Assert.Equal("..", ((TomlTable)bare.Raw["git"])["repo"]);
     }
 
