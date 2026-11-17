@@ -135,15 +135,17 @@ public sealed class CommitterTests : IDisposable
     }
 
     [Fact]
-    public void A_folder_inside_the_repository_takes_paths_relative_to_itself()
+    public void A_folder_inside_the_repository_finds_it_and_paths_are_still_relative_to_the_top()
     {
         repo.Write("tools/settings.toml", "x\n");
         repo.Write("reports/a.md", "a\n");
         var git = Git(folder: repo.File("tools"));
         Assert.Equal(repo.Path, git.Top);
-        Assert.Equal("reports/a.md", git.RepoPath("../reports/a.md"));
-        Assert.Equal("tools/settings.toml", git.RepoPath("settings.toml"));
-        var result = git.Commit("A", ["../reports/a.md"]);
+        Assert.Equal("reports/a.md", git.RepoPath("reports/a.md"));
+        Assert.Equal("tools/settings.toml", git.RepoPath(repo.File("tools/settings.toml")));
+        Assert.Null(git.RepoPath("../reports/a.md"));
+        Assert.Equal(["reports/a.md"], git.Changed([repo.File("reports/a.md")]));
+        var result = git.Commit("A", git.Changed(["reports/a.md"]));   // what Changed returns commits as it is
         Assert.True(result.Committed, result.Error);
         Assert.Equal(["A\treports/a.md"], repo.LastFiles);
     }

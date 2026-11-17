@@ -37,7 +37,8 @@ public sealed record CommitResult(bool Committed, string? Commit, IReadOnlyList<
 /// <item><b>A push that fails</b> is reported (<see cref="CommitResult.PushError"/>), never thrown, and the commit stays.</item>
 /// <item><b>Logged without file contents</b>: counts, the commit id and git's own error lines.</item>
 /// </list>
-/// Paths may be given relative to the repository folder, or in full. git is run from the PATH, never asked to prompt.
+/// Paths may be given in full, or relative to the repository's top (as git reports them, so what <see cref="Changed"/>
+/// returns can be committed as it is). git is run from the PATH, never asked to prompt.
 /// </summary>
 public sealed class Committer
 {
@@ -51,7 +52,8 @@ public sealed class Committer
     private readonly TimeSpan pushTimeout;
     private string? top;
 
-    /// <param name="repo">The repository's folder: its top, or a folder inside it (paths are then relative to that).</param>
+    /// <param name="repo">The repository's folder: its top, or any folder inside it (relative paths are still relative to
+    /// the top).</param>
     /// <param name="log">Where progress and problems go, a line at a time, each starting "git: ".</param>
     /// <param name="program">git itself; by default git on the PATH.</param>
     /// <param name="lockRetries">How many more times a command is tried while another git holds the index.</param>
@@ -93,7 +95,7 @@ public sealed class Committer
     }
 
     /// <summary>A path as the repository knows it: relative to its top, with forward slashes. Null for anything outside
-    /// it, the top itself, or anything in .git. A relative path is taken as relative to <see cref="Repo"/>.</summary>
+    /// it, the top itself, or anything in .git. A relative path is taken as relative to the top.</summary>
     public string? RepoPath(string path)
     {
         ArgumentNullException.ThrowIfNull(path);
@@ -102,7 +104,7 @@ public sealed class Committer
         string full;
         try
         {
-            full = Path.GetFullPath(Path.IsPathFullyQualified(path) ? path : Path.Combine(Repo, path));
+            full = Path.GetFullPath(Path.IsPathFullyQualified(path) ? path : Path.Combine(Top, path));
         }
         catch (Exception error) when (error is ArgumentException or NotSupportedException or PathTooLongException)
         {

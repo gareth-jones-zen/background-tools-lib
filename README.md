@@ -345,7 +345,7 @@ var message = Committer.Message("Subject", "Body.", ["Co-Authored-By: ..."]);
 
 - **Only the given paths, and both sides of each rename, are staged and committed**: `git add -A` and then `git commit`, each with exactly those paths as pathspecs (read from stdin, so there's no limit on how many), and only those of them git sees as changed. `git commit` with paths commits only those paths, even when something else is staged.
 - **Every pathspec is literal** (`--literal-pathspecs`), so a file named `[ab].md` is only that file, never a pattern.
-- **A path outside the repository**, the top itself, or anything in `.git` refuses the whole commit: nothing is staged. Paths may be relative to the folder given, or in full.
+- **A path outside the repository**, the top itself, or anything in `.git` refuses the whole commit: nothing is staged. Paths may be in full, or relative to the repository's top (as git reports them: what `Changed` returns can be committed as it is), even when the folder given is inside it.
 - **Nothing changed in the given paths**: no commit, no error (`CommitResult.Nothing`), and "git: nothing to commit" in the log.
 - **Another git holding the index** (`index.lock`, say a person committing at the same moment): the command is tried again, every half second for up to ten seconds by default, then reported.
 - **A push** (`git push -q`, to the branch's upstream) that fails is reported in `PushError` and the log, never thrown; the commit stays. git is never left waiting for a person: `GIT_TERMINAL_PROMPT=0`, and no optional index lock while reading status (`GIT_OPTIONAL_LOCKS=0`).
