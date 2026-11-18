@@ -90,6 +90,13 @@ public sealed class ScheduledTask(string name, string description = "", IReadOnl
             // No -RepetitionDuration: without one the repetition is indefinite, and [TimeSpan]::MaxValue, the
             // usual workaround, is refused by Windows 10 and later.
             triggers.Add($"(New-ScheduledTaskTrigger -Once -At (Get-Date) -RepetitionInterval (New-TimeSpan -Seconds {(long)every.TotalSeconds}))");
+        if (schedule.AfterUnlock is { } unlock)
+            // The ScheduledTasks module has no unlock trigger, so it's built from its CIM class (SessionUnlock = 8).
+            // Waking from sleep always ends in an unlock, so this catches up runs missed while asleep, which a
+            // repetition trigger may skip (the EA's prep engine, 14 Oct 2026).
+            triggers.Add("(& { $t = New-CimInstance -CimClass (Get-CimClass -Namespace Root/Microsoft/Windows/TaskScheduler " +
+                         "-ClassName MSFT_TaskSessionStateChangeTrigger) -ClientOnly; $t.StateChange = 8; $t.UserId = $me; " +
+                         $"$t.Enabled = $true; $t.Delay = {Shell.Quote(System.Xml.XmlConvert.ToString(unlock))}; $t }})");
         var limits = schedule.KeepRunning
             ? "-ExecutionTimeLimit ([TimeSpan]::Zero) -RestartCount 3 -RestartInterval (New-TimeSpan -Minutes 5)"
             : $"-ExecutionTimeLimit (New-TimeSpan -Seconds {(long)schedule.TimeLimit.TotalSeconds})";
@@ -277,6 +284,10 @@ public sealed record TaskSchedule
     /// least a minute apart. A run still going when the next is due is left to finish, and the next is skipped.</summary>
     public TimeSpan? Every { get; init; }
 
+    /// <summary>Also run this long after each unlock of your session (zero for at once): catches up after sleep, as
+    /// waking always ends in an unlock. Added v0.5 (18 Nov 2026).</summary>
+    public TimeSpan? AfterUnlock { get; init; }
+
     /// <summary>A watcher (true), or a job stopped after TimeLimit (false).</summary>
     public bool KeepRunning { get; init; } = true;
 
@@ -286,8 +297,10 @@ public sealed record TaskSchedule
 
     internal void Validate()
     {
-        if (!AtLogon && DailyAt is null && Every is null)
-            throw new ArgumentException("A task needs a trigger: at logon, daily, every, or a mix.");
+        if (!AtLogon && DailyAt is null && Every is null && AfterUnlock is null)
+            throw new ArgumentException("A task needs a trigger: at logon, daily, every, after unlock, or a mix.");
+        if (AfterUnlock is { } unlock && unlock < TimeSpan.Zero)
+            throw new ArgumentException("AfterUnlock can't be negative.");
         if (Every is { } every && (KeepRunning || every < TimeSpan.FromMinutes(1)))
             throw new ArgumentException("Every is for a job (KeepRunning false), at least a minute apart.");
     }
