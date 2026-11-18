@@ -138,7 +138,10 @@ public class QueueFileTests
         File.WriteAllBytes(path, Encoding.UTF8.GetBytes(PythonFile));
         var queue = Queue(folder);
         Assert.Equal(["a7910e09", "75530838", "a41dca56"], queue.Items().Select(i => (string)i["id"]!));
-        Assert.Equal(0, queue.Done(["nothing"]));   // a write, changing nothing
+        var written = File.GetLastWriteTimeUtc(path);
+        Assert.Equal(0, queue.Done(["nothing"]));   // nothing matched: not written at all (v0.6)
+        Assert.Equal(written, File.GetLastWriteTimeUtc(path));
+        queue.Replace("no-such-source", []);       // a write, changing nothing
         Assert.Equal(Encoding.UTF8.GetBytes(PythonFile), File.ReadAllBytes(path));
     }
 

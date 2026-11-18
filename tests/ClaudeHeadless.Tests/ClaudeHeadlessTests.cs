@@ -246,6 +246,7 @@ public class RunnerTests : IDisposable
         Assert.Equal("# [DRAFT] x", (string?)result["result"]);
         Assert.Equal(@"C:\fake\claude.cmd", fake.Calls[0].Exe);
         Assert.Equal("1", fake.Calls[0].Env["DISABLE_AUTOUPDATER"]);
+        Assert.Equal("1", fake.Calls[0].Env["CLAUDE_HEADLESS"]);   // so a person's SessionStart hook can stay out of it
         Assert.Equal("the prompt", fake.Calls[0].Input);
     }
 

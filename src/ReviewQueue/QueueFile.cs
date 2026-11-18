@@ -210,7 +210,8 @@ public sealed class QueueFile
             var leaving = list.Where(i => gone.Contains(Text(i!["id"]) ?? "\0") || gone.Contains(Text(i!["source"]) ?? "\0")).ToList();
             foreach (var item in leaving)
                 list.Remove(item);
-            Write(data);
+            if (leaving.Count > 0)   // v0.6: nothing matched, nothing written
+                Write(data);
             return leaving.Count;
         }
     }

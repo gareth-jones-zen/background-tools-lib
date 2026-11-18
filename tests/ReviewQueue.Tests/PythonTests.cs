@@ -110,7 +110,7 @@ public class PythonTests
         Assert.True((bool)queue.Items("cover-rota").Single()["seen"]!);
 
         var before = File.ReadAllBytes(path);
-        queue.Done([]);   // read and written back
+        queue.Replace("no-such-source", []);   // read and written back (Done that matches nothing writes nothing, v0.6)
         Assert.Equal(before, File.ReadAllBytes(path));
     }
 

@@ -53,11 +53,20 @@ public sealed class ClaudeRunner(JobQueue? queue = null, IProcessStarter? starte
         throw new ClaudeRunException("The claude CLI isn't on the PATH (is Claude Code installed?)");
     }
 
+    /// <summary>Set in every headless run's environment (v0.6, 18 Nov 2026), so a Claude Code hook can tell a run
+    /// started by a tool from a person's session and stay out of it: a SessionStart hook that briefs a person, say,
+    /// has nothing to say to a job drafting a summary. Claude Code passes its environment on to its hooks.</summary>
+    public const string HeadlessVariable = "CLAUDE_HEADLESS";
+
+    /// <summary>The variables every headless run gets on top of the environment.</summary>
+    public static readonly IReadOnlyDictionary<string, string> HeadlessEnvironment =
+        new Dictionary<string, string> { ["DISABLE_AUTOUPDATER"] = "1", [HeadlessVariable] = "1" };
+
     public JsonObject Run(IReadOnlyList<string> command, string prompt, string cwd, TimeSpan timeout)
     {
         if (queue.LimitUntil() is { } until)
             throw new LimitReachedException(until, $"Claude's usage limit is in force until {Limits.Clock(until)}");
-        var done = starter.Run(Exe(), command, prompt, cwd, new Dictionary<string, string> { ["DISABLE_AUTOUPDATER"] = "1" }, timeout);
+        var done = starter.Run(Exe(), command, prompt, cwd, HeadlessEnvironment, timeout);
         JsonNode? parsed;
         try
         {
