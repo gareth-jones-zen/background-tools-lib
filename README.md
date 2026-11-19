@@ -330,13 +330,14 @@ The tests check ids and the file's bytes against values computed by Python (pinn
 ```csharp
 using RepoCommit;
 
-var git = new Committer(@"C:
-otes", log.Info);   // the repository's top, or a folder inside it
+var git = new Committer(@"C:\notes", log.Info);   // the repository's top
 var result = git.Commit("Ingest exco-notes 2026-10-23", ["reports/exco-notes/2026-10-23.md"],
     renames: [new Rename("preps/2026-10-01.md", "preps/archive/2026-10/2026-10-01.md")],
     trailers: ["Co-Authored-By: Claude <noreply@anthropic.com>"], push: true);
+if (result.Skipped is not null) { /* git isn't set up here: the files are saved, nothing to tell anyone */ }
 if (result.Error is not null) { /* nothing committed: tell someone */ }
 if (result.PushError is not null) { /* committed, not pushed */ }
+if (git.Skipped is { } why) { /* ask up front: git not installed, not a repository, or not its top */ }
 
 var changed = git.Changed(paths);   // which of these git sees as changed, in git status's order
 var tracked = git.Tracked(paths);   // which of these are in the index
@@ -349,7 +350,9 @@ var message = Committer.Message("Subject", "Body.", ["Co-Authored-By: ..."]);
 - **Nothing changed in the given paths**: no commit, no error (`CommitResult.Nothing`), and "git: nothing to commit" in the log.
 - **Another git holding the index** (`index.lock`, say a person committing at the same moment): the command is tried again, every half second for up to ten seconds by default, then reported.
 - **A push** (`git push -q`, to the branch's upstream) that fails is reported in `PushError` and the log, never thrown; the commit stays. git is never left waiting for a person: `GIT_TERMINAL_PROMPT=0`, and no optional index lock while reading status (`GIT_OPTIONAL_LOCKS=0`).
-- **git's own failures never throw from `Commit`**: they're in `Error` and the log. `Changed` and `Tracked` throw `GitException` (or `InvalidOperationException` for a folder that isn't in a repository).
+- **git not set up is `Skipped`, not an error**: git not installed (none on the PATH), the folder not a git repository, or a folder *inside* a repository rather than its top (nothing is ever committed into a repository the folder only happens to sit in). `Commit` returns `CommitResult.Skipped` with the reason and `Error` null; `Changed` and `Tracked` return nothing; `Skipped` on the committer gives the reason up front. It's found out once a process for each folder, and logged once a process ("git: not committing: ..."), so a watcher says it once a logon and a one-shot run once. A tool should never notify it or fail a run for it: the files are saved. (After `git init`, restart a watcher for it to start committing.)
+- **No upstream, no push**: when the branch has no upstream (no remote, or never pushed), the commit stays and no push is tried: `PushSkipped` says why, logged once a process.
+- **git's own failures never throw from `Commit`**: they're in `Error` and the log, as before (a repository that refuses a commit: a hook, a lock, a conflict). `Changed` and `Tracked` throw `GitException` for those (or `InvalidOperationException` for a folder that doesn't exist).
 - **The log holds no file contents and no commit messages**: counts, the commit id, and git's own error lines, each starting `git: `.
 - **git is found on the PATH by its full path**, never by bare name (which would also look in the tool's own folder and the current folder first). Each command has a timeout: two minutes, five for the push.
 
@@ -357,7 +360,7 @@ var message = Committer.Message("Subject", "Body.", ["Co-Authored-By: ..."]);
 
 ```toml
 [git]                                     # no section: the tool commits nothing
-repo = ".."                               # the repository: its top, or a folder in it
+repo = ".."                               # the repository: its top (a folder inside one is skipped)
 commit = true                             # optional (default true): false keeps the section but commits nothing
 push = true                               # optional (default false): push after each commit
 trailers = ["Co-Authored-By: Claude <noreply@anthropic.com>"]   # optional: the message's last paragraph
@@ -369,7 +372,7 @@ if (git is { Commit: true })
     git.Open(log).Commit(message, written, trailers: git.Trailers, push: git.Push);
 ```
 
-The tests run real git on temporary repositories: other changes left untouched, a path outside refused, renames, deletions, nothing to commit, odd names, 250 paths at once, a folder inside the repository, `index.lock` waited for and given up on, and a push to a local bare remote (and a failed one).
+The tests run real git on temporary repositories: other changes left untouched, a path outside refused, renames, deletions, nothing to commit, odd names, 250 paths at once, a folder inside the repository (skipped), a plain folder and git off the PATH (skipped, said once), `index.lock` waited for and given up on, and a push to a local bare remote (and a failed one, and none tried with no upstream).
 
 ## Using it from a tool
 

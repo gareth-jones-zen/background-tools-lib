@@ -8,7 +8,7 @@ namespace RepoCommit;
 /// <summary>A tool's <c>[git]</c> settings: which repository it commits what it writes into, and how.
 /// <code>
 /// [git]                                   # optional: no section, nothing committed
-/// repo = ".."                             # the repository (its top, or a folder in it)
+/// repo = ".."                             # the repository: its top (a folder inside one is skipped)
 /// commit = true                           # optional (default true): false keeps the section but commits nothing
 /// push = true                             # optional (default false): push after each commit
 /// trailers = ["Co-Authored-By: Name &lt;name@example.com&gt;"]   # optional: lines at the end of every message

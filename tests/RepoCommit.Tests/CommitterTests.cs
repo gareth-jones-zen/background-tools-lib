@@ -135,31 +135,79 @@ public sealed class CommitterTests : IDisposable
     }
 
     [Fact]
-    public void A_folder_inside_the_repository_finds_it_and_paths_are_still_relative_to_the_top()
+    public void A_folder_inside_the_repository_is_skipped_and_nothing_is_committed_into_the_outer_repository()
     {
         repo.Write("tools/settings.toml", "x\n");
-        repo.Write("reports/a.md", "a\n");
+        repo.Write("tools/a.md", "a\n");
+        var before = repo.Count;
         var git = Git(folder: repo.File("tools"));
-        Assert.Equal(repo.Path, git.Top);
-        Assert.Equal("reports/a.md", git.RepoPath("reports/a.md"));
-        Assert.Equal("tools/settings.toml", git.RepoPath(repo.File("tools/settings.toml")));
-        Assert.Null(git.RepoPath("../reports/a.md"));
-        Assert.Equal(["reports/a.md"], git.Changed([repo.File("reports/a.md")]));
-        var result = git.Commit("A", git.Changed(["reports/a.md"]));   // what Changed returns commits as it is
-        Assert.True(result.Committed, result.Error);
-        Assert.Equal(["A\treports/a.md"], repo.LastFiles);
+        Assert.Equal($"{repo.File("tools")} is inside the git repository at {repo.Path}, not its top; nothing is committed into it.", git.Skipped);
+        var result = git.Commit("A", ["tools/a.md"]);
+        Assert.False(result.Committed);
+        Assert.Null(result.Error);
+        Assert.Equal(git.Skipped, result.Skipped);
+        Assert.Empty(git.Changed([repo.File("tools/a.md")]));
+        Assert.Empty(git.Tracked([repo.File("tools/settings.toml")]));
+        Assert.Throws<InvalidOperationException>(() => git.Top);
+        Assert.Equal(before, repo.Count);
+        Assert.Equal(["?? tools/a.md", "?? tools/settings.toml"], repo.Status);
+        Assert.Equal([$"git: not committing: {git.Skipped}"], lines);   // once, however often it's asked
     }
 
     [Fact]
-    public void A_folder_that_isnt_a_repository_is_an_error_not_an_exception()
+    public void The_top_given_with_a_trailing_separator_is_still_the_top()
+    {
+        repo.Write("a.md", "a\n");
+        var git = Git(folder: repo.Path + Path.DirectorySeparatorChar);
+        Assert.Null(git.Skipped);
+        Assert.True(git.Commit("A", ["a.md"]).Committed);
+    }
+
+    [Fact]
+    public void A_folder_that_isnt_a_repository_is_skipped_once_a_process_and_isnt_an_error()
     {
         var plain = Path.Combine(repo.Root, "plain");
         Directory.CreateDirectory(plain);
         File.WriteAllText(Path.Combine(plain, "a.md"), "a");
-        var result = new Committer(plain, lines.Add).Commit("A", ["a.md"]);
-        Assert.False(result.Committed);
-        Assert.Contains("isn't in a git working tree", result.Error);
-        Assert.EndsWith("isn't a folder.", new Committer(Path.Combine(repo.Root, "missing"), lines.Add).Commit("A", ["a.md"]).Error);
+        var reason = $"{plain} isn't a git repository.";
+        for (var run = 0; run < 3; run++)
+        {
+            var git = new Committer(plain, lines.Add);   // a new committer each time, as the tools make one per commit
+            var result = git.Commit("A", ["a.md"], push: true);
+            Assert.Equal(CommitResult.Skip(reason), result);
+            Assert.Null(result.Error);
+            Assert.Empty(git.Changed(["a.md"]));
+            Assert.Empty(git.Tracked(["a.md"]));
+            Assert.Equal(reason, git.Skipped);
+        }
+        Assert.Equal([$"git: not committing: {reason}"], lines);
+        Assert.False(Directory.Exists(Path.Combine(plain, ".git")));   // never initialised
+        Assert.Equal(CommitResult.Nothing, new Committer(plain, lines.Add).Commit("A", []));   // nothing given: nothing to say
+    }
+
+    [Fact]
+    public void Git_not_installed_is_skipped_not_an_error()
+    {
+        repo.Write("a.md", "a\n");
+        var before = repo.Count;
+        var git = new Committer(repo.Path, lines.Add, program: Path.Combine(repo.Root, "no-git", "git.exe"));
+        var result = git.Commit("A", ["a.md"]);
+        Assert.Equal("git isn't installed (there's no git on the PATH).", result.Skipped);
+        Assert.Null(result.Error);
+        Assert.Empty(git.Changed(["a.md"]));
+        Assert.Equal(before, repo.Count);
+        Assert.Equal(["git: not committing: git isn't installed (there's no git on the PATH)."], lines);
+    }
+
+    [Fact]
+    public void A_folder_that_doesnt_exist_is_an_error_not_a_skip()
+    {
+        var git = new Committer(Path.Combine(repo.Root, "missing"), lines.Add);
+        var result = git.Commit("A", ["a.md"]);
+        Assert.Null(result.Skipped);
+        Assert.EndsWith("isn't a folder.", result.Error);
+        Assert.Null(git.Skipped);
+        Assert.Throws<InvalidOperationException>(() => git.Changed(["a.md"]));
     }
 
     [Fact]
@@ -217,6 +265,22 @@ public sealed class CommitterTests : IDisposable
         Assert.Null(failed.Error);
         Assert.Equal("B", repo.LastMessage);
         Assert.Contains(lines, l => l.StartsWith("git: push failed: ", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void No_upstream_is_no_push_attempt_said_once()
+    {
+        for (var i = 0; i < 2; i++)
+        {
+            repo.Write($"{i}.md", "x\n");
+            var result = Git().Commit($"C{i}", [$"{i}.md"], push: true);
+            Assert.True(result.Committed, result.Error);
+            Assert.False(result.Pushed);
+            Assert.Null(result.PushError);
+            Assert.Equal("the branch has no upstream to push to", result.PushSkipped);
+        }
+        Assert.Single(lines, l => l == "git: not pushing: the branch has no upstream to push to");
+        Assert.DoesNotContain(lines, l => l.StartsWith("git: push failed", StringComparison.Ordinal));
     }
 
     [Fact]
