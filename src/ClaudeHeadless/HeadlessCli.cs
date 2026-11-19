@@ -71,6 +71,7 @@ public static class HeadlessCli
     private static int Autostart(List<string> args, HeadlessHost host)
     {
         var every = 15;
+        var afterUnlock = 1;   // minutes after each unlock; 0 leaves the trigger out
         string? action = null;
         for (var i = 0; i < args.Count; i++)
         {
@@ -81,6 +82,11 @@ public static class HeadlessCli
             }
             else if (args[i].StartsWith("--every=", StringComparison.Ordinal) && int.TryParse(args[i][8..], out var m))
                 every = m;
+            else if (args[i] == "--after-unlock" && i + 1 < args.Count && int.TryParse(args[i + 1], out var u) && u >= 0)
+            {
+                afterUnlock = u;
+                i++;
+            }
             else if (action is null && args[i] is "on" or "off" or "status")
                 action = args[i];
             else
@@ -97,10 +103,14 @@ public static class HeadlessCli
                 {
                     AtLogon = true,
                     Every = TimeSpan.FromMinutes(every),
+                    // A run soon after the laptop is unlocked, so jobs that waited while it slept start at once rather
+                    // than at the next repeat, up to `every` minutes later (GJ, 19 Nov 2026).
+                    AfterUnlock = afterUnlock > 0 ? TimeSpan.FromMinutes(afterUnlock) : null,
                     KeepRunning = false,
                     TimeLimit = TimeSpan.FromHours(4),
                 });
-                host.Out.WriteLine($"Autostart is on: '{task.Name}' runs every {every} minutes and at logon.");
+                host.Out.WriteLine($"Autostart is on: '{task.Name}' runs every {every} minutes, at logon"
+                                   + (afterUnlock > 0 ? $" and {afterUnlock} minute(s) after each unlock." : "."));
                 host.Out.WriteLine($"  {line}");
                 return 0;
             case "off":

@@ -395,13 +395,15 @@ public class CliTests : IDisposable
     {
         var (code, output, _) = Run("autostart", "on");
         Assert.Equal(0, code);
-        Assert.Equal("Autostart is on: 'claude-headless run-queue' runs every 15 minutes and at logon.\n  C:\\tools\\claude-headless-background.exe run-queue\n", output);
+        Assert.Equal("Autostart is on: 'claude-headless run-queue' runs every 15 minutes, at logon and 1 minute(s) after each unlock.\n  C:\\tools\\claude-headless-background.exe run-queue\n", output);
         var schedule = task.Enabled[0].Schedule!;
         Assert.Equal(TimeSpan.FromMinutes(15), schedule.Every);
+        Assert.Equal(TimeSpan.FromMinutes(1), schedule.AfterUnlock);
         Assert.False(schedule.KeepRunning);
         Assert.Equal(TimeSpan.FromHours(4), schedule.TimeLimit);
-        Run("autostart", "on", "--every", "5");
-        Assert.Equal(TimeSpan.FromMinutes(5), task.Enabled[1].Schedule!.Every);
+        Assert.Equal("Autostart is on: 'claude-headless run-queue' runs every 5 minutes, at logon.\n  C:\\tools\\claude-headless-background.exe run-queue\n",
+            Run("autostart", "on", "--every", "5", "--after-unlock", "0").Out);
+        Assert.Equal((TimeSpan.FromMinutes(5), null), (task.Enabled[1].Schedule!.Every, task.Enabled[1].Schedule!.AfterUnlock));
         Assert.Equal("Autostart was already off.\n", Run("autostart", "off").Out);
         Assert.Equal("Autostart is on ('claude-headless run-queue').\n  state        Ready\n  last run     \n  last result  \n  next run     soon\n",
             Run("autostart", "status").Out);
