@@ -43,6 +43,8 @@ run.Release();
 
 A `NamedLock` is a mutex named `Local\{name}`, the same object the Python `win-background` locks create, so .NET and Python tools exclude each other by name. Windows releases a mutex when the process holding it ends (it's "abandoned"), so a crash never leaves a lock stuck.
 
+**To restart a watcher, use its task's `Restart` (a tool's `autostart restart`), never `schtasks /End` then `/Run`.** `/End` returns before the process has exited, so the new watcher finds the old one still holding its single-instance lock and quits, and nothing runs. `Restart` stops the task, waits for the process to exit, then starts it, and starts nothing if the old one outlives the wait.
+
 **Each held lock has a small thread of its own** (fixed 12 Nov 2026). A Win32 mutex belongs to the thread that took it, and `ReleaseMutex` fails on any other thread. The first version took and released the mutex on the caller's thread, so in async code (acquire, `await`, release) the release ran on another thread, failed without a word, and left the lock held until the process exited whenever another process had the mutex open, such as one waiting for it. Now the lock's own thread takes the mutex, waits, and releases it when asked, so:
 
 - `Acquire`, `AcquireAsync`, `Release` and `Dispose` work from any thread, either side of an `await`;
