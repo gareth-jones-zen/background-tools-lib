@@ -16,8 +16,9 @@ Shared .NET libraries for a set of small personal background tools on Windows: w
 | `src/PeopleFirstClient` | People First (MHR's HR system) read as you through its web app's own single sign-on: a hidden Edge takes the token, then HttpClient reads the API. GETs, and one POST that's never resent. A port of `people-first-client` | Windows only (`net11.0-windows`) |
 | `src/ReviewQueue` | A review queue a session reads: one JSON file where background tools leave items for a person (or an assistant's next session) to look at and clear, written under a lock between processes and replaced atomically, in a format a Python program can share byte for byte | Windows only (`net11.0-windows`) |
 | `src/RepoCommit` | Committing exactly the files a tool wrote into a git repository, and nothing else, then pushing: git run as a child process, every pathspec literal, renames, another git's `index.lock` waited for, a push failure reported rather than thrown. Also a tool's `[git]` settings | Any (`net11.0`) |
+| `src/CalendarDays` | What a calendar says about a day: leave (your own entries by subject or category, with a minimum of hours), a day away working (a conference by name, or an event shown as working elsewhere), a weekend. The day rules the calendar tools share, so they agree on what counts. Pure: the tool reads the events | Any (`net11.0`) |
 
-Windows-only code lives in the Windows-only projects (`WinBackground`, `ClaudeHeadless`, `ReviewQueue` (for its lock), and `EdgeDevTools` and `PeopleFirstClient`, which drive Edge on Windows), so `M365Graph`, `PyCompat` and `RepoCommit` can later build for other platforms, and any of them could become a NuGet package.
+Windows-only code lives in the Windows-only projects (`WinBackground`, `ClaudeHeadless`, `ReviewQueue` (for its lock), and `EdgeDevTools` and `PeopleFirstClient`, which drive Edge on Windows), so `M365Graph`, `PyCompat`, `RepoCommit` and `CalendarDays` can later build for other platforms, and any of them could become a NuGet package.
 
 All the libraries are AOT- and trim-checked (`IsAotCompatible`), build with warnings as errors, and publish under Native AOT with no warnings.
 
@@ -377,6 +378,26 @@ if (git is { Commit: true })
 ```
 
 The tests run real git on temporary repositories: other changes left untouched, a path outside refused, renames, deletions, nothing to commit, odd names, 250 paths at once, a folder inside the repository (skipped), a plain folder and git off the PATH (skipped, said once), `index.lock` waited for and given up on, and a push to a local bare remote (and a failed one, and none tried with no upstream).
+
+### CalendarDays
+
+The day rules work-location and out-of-office share, written once so the tools agree on what a day is. The tool reads
+its calendar and hands in the events as `DayEvent`s (local time; `Mine` for your own entries, `Attendees` not counting
+rooms).
+
+```csharp
+var leave = new LeaveRules(new Regex(@"^\s*(holiday|annual leave)", RegexOptions.IgnoreCase), ["Bank holiday"], MinHours: 6);
+var away = new ElsewhereRules(new Regex(@"(conference|summit)", RegexOptions.IgnoreCase), ["workingElsewhere"]);
+
+DayRules.Leave(leave, events, day)        // LeaveDay: DayOff (6 hours or more, or all day), Hours (overlaps merged), Entries
+DayRules.Elsewhere(away, events, day)     // ElsewhereDay?: the event and why; a matching all-day subject first, then show-as
+DayRules.Weekend(day)
+```
+
+- **Leave is only your own entries with no one else invited**, so a meeting called "Holiday planning" isn't leave.
+- **A conference subject counts only on an all-day event** unless `SubjectsAllDayOnly = false`; then, like a show-as
+  signal, it must cover `MinHours` of the day (0, the default: any length).
+- `Elsewhere`'s `notASignal` leaves out events whose show-as says nothing, such as a tool's own entries.
 
 ## Using it from a tool
 

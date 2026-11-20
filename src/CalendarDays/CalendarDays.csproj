@@ -1,0 +1,8 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!-- What a calendar says about a day: leave, a bank holiday, a conference or other day away, a weekend. The rules the
+       calendar tools share (work-location, out-of-office), so they agree on what counts. Pure: the tool reads the events
+       and hands them in. -->
+  <ItemGroup>
+    <InternalsVisibleTo Include="CalendarDays.Tests" />
+  </ItemGroup>
+</Project>
