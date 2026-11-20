@@ -48,12 +48,20 @@ public sealed class Api : IDisposable
 
     /// <summary>The raw body of a GET under /api/v1. A status outside 200-299 is a PeopleFirstException naming the
     /// path but not its query (which can hold dates or names).</summary>
-    public async Task<byte[]> GetBytesAsync(string path, CancellationToken cancellationToken = default)
+    public Task<byte[]> GetBytesAsync(string path, CancellationToken cancellationToken = default) =>
+        GetBytesAsync(path, "application/json", cancellationToken);
+
+    /// <summary>The raw body of a GET under /api/v1, asking for <paramref name="accept"/> rather than JSON: a file
+    /// attached to a record (a claim's receipt, say) comes back as itself only when the request doesn't ask for JSON
+    /// (with <c>application/json</c> its download link answers with the attachment's details again). Otherwise as
+    /// <see cref="GetBytesAsync(string, CancellationToken)"/>.</summary>
+    public async Task<byte[]> GetBytesAsync(string path, string accept, CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(path);
+        ArgumentException.ThrowIfNullOrEmpty(accept);
         using var request = new HttpRequestMessage(HttpMethod.Get, Root + path);
         foreach (var (name, value) in Headers)
-            request.Headers.TryAddWithoutValidation(name, value);
+            request.Headers.TryAddWithoutValidation(name, name == "Accept" ? accept : value);
         using var response = await http.SendAsync(request, cancellationToken).ConfigureAwait(false);
         var status = (int)response.StatusCode;
         if (status is < 200 or > 299)
