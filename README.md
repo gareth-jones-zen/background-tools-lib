@@ -386,8 +386,8 @@ its calendar and hands in the events as `DayEvent`s (local time; `Mine` for your
 rooms).
 
 ```csharp
-var leave = new LeaveRules(new Regex(@"^\s*(holiday|annual leave)", RegexOptions.IgnoreCase), ["Bank holiday"], MinHours: 6);
-var away = new ElsewhereRules(new Regex(@"(conference|summit)", RegexOptions.IgnoreCase), ["workingElsewhere"]);
+var leave = new LeaveRules(new Regex(@"^\s*(holiday\b|annual leave)", RegexOptions.IgnoreCase), ["Bank holiday"], MinHours: 6);
+var away = new ElsewhereRules(new Regex(@"\b(conference|summit)\b", RegexOptions.IgnoreCase), ["workingElsewhere"]);
 
 DayRules.Leave(leave, events, day)        // LeaveDay: DayOff (6 hours or more, or all day), Hours (overlaps merged), Entries
 DayRules.Elsewhere(away, events, day)     // ElsewhereDay?: the event and why; a matching all-day subject first, then show-as
