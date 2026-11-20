@@ -77,6 +77,26 @@ public sealed class Api : IDisposable
         return document.RootElement.Clone();
     }
 
+    /// <summary>A GET under /api/v1, as JSON, with the record's ETag (the <c>ETag</c> header; null if there isn't one).
+    /// People First checks a write against it: a POST that changes a record needs <c>If-Match</c> with the ETag of the
+    /// GET it was read from, or it's refused with 412 (20 Nov 2026, approving a claim; the web app does the same).</summary>
+    public async Task<(JsonElement Body, string? ETag)> GetWithEtagAsync(string path, CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(path);
+        using var request = new HttpRequestMessage(HttpMethod.Get, Root + path);
+        foreach (var (name, value) in Headers)
+            request.Headers.TryAddWithoutValidation(name, value);
+        using var response = await http.SendAsync(request, cancellationToken).ConfigureAwait(false);
+        var status = (int)response.StatusCode;
+        if (status is < 200 or > 299)
+            throw new PeopleFirstException($"People First answered {status} to {path.Split('?')[0]}") { Status = status };
+        var body = await response.Content.ReadAsByteArrayAsync(cancellationToken).ConfigureAwait(false);
+        string? etag = response.Headers.ETag?.ToString()
+                       ?? (response.Headers.TryGetValues("ETag", out var values) ? values.FirstOrDefault() : null);
+        using var document = JsonDocument.Parse(body);
+        return (document.RootElement.Clone(), string.IsNullOrEmpty(etag) ? null : etag);
+    }
+
     /// <summary>A POST under /api/v1 with a JSON body (<c>Content-Type: application/json</c>, and the same headers as
     /// a GET); the reply as JSON, or an empty object if it has no body.
     /// <para><b>A write that may have reached People First is never resent: there's no retry at all.</b> What a
@@ -90,7 +110,14 @@ public sealed class Api : IDisposable
     /// </list>
     /// <para>Messages name the path but not its query, as a GET's do. Cancelling through
     /// <paramref name="cancellationToken"/> throws OperationCanceledException, and the write may have happened.</para></summary>
-    public async Task<JsonElement> PostAsync(string path, JsonNode body, CancellationToken cancellationToken = default)
+    public Task<JsonElement> PostAsync(string path, JsonNode body, CancellationToken cancellationToken = default) =>
+        PostAsync(path, body, null, cancellationToken);
+
+    /// <summary>A POST as <see cref="PostAsync(string, JsonNode, CancellationToken)"/>, never resent, with extra
+    /// headers (<c>If-Match</c>, say: the ETag from <see cref="GetWithEtagAsync"/>). The usual headers can't be
+    /// replaced through it.</summary>
+    public async Task<JsonElement> PostAsync(string path, JsonNode body, IReadOnlyDictionary<string, string>? headers,
+        CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(path);
         ArgumentNullException.ThrowIfNull(body);
@@ -98,6 +125,12 @@ public sealed class Api : IDisposable
         using var request = new HttpRequestMessage(HttpMethod.Post, Root + path);
         foreach (var (name, value) in Headers)
             request.Headers.TryAddWithoutValidation(name, value);
+        foreach (var (name, value) in headers ?? new Dictionary<string, string>())
+        {
+            if (Headers.Any(h => h.Key.Equals(name, StringComparison.OrdinalIgnoreCase)))
+                throw new ArgumentException($"{name} is one of the usual headers and can't be replaced.", nameof(headers));
+            request.Headers.TryAddWithoutValidation(name, value);
+        }
         request.Content = new ByteArrayContent(Encoding.UTF8.GetBytes(body.ToJsonString()));
         request.Content.Headers.ContentType = new MediaTypeHeaderValue("application/json");
         int status;
