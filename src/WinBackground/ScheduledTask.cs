@@ -29,7 +29,7 @@ public interface ITask
     /// a test fake written before it keeps compiling, and says so plainly if a test reaches it.</para></summary>
     bool Start() => throw new NotSupportedException($"{GetType().Name} doesn't implement Start.");
 
-    /// <summary>Null if there's no task; otherwise state, command, last_run, last_result and next_run.</summary>
+    /// <summary>Null if there's no task; otherwise state, command, last_run, last_result and next_run, and (v0.6) description.</summary>
     IReadOnlyDictionary<string, string>? Status();
 
     /// <summary>Stop the task, wait for its process to exit, and start it again: how a watcher picks up a new
@@ -111,7 +111,7 @@ public sealed class ScheduledTask(string name, string description = "", IReadOnl
             $principal = New-ScheduledTaskPrincipal -UserId $me -LogonType Interactive -RunLevel Limited
             {StopAndWait()}
             Register-ScheduledTask {Which} -Action $action -Trigger $triggers -Settings $settings -Principal $principal `
-                -Description {Shell.Quote(Description)} -Force | Out-Null
+                -Description {Shell.Quote(schedule.Fingerprint is { } fp ? ScheduleDrift.WithFingerprint(Description, fp) : Description)} -Force | Out-Null
             {(schedule.StartNow ? "Start-ScheduledTask " + Which : "")}
 
             """;
@@ -231,6 +231,7 @@ public sealed class ScheduledTask(string name, string description = "", IReadOnl
               "last_run=$($info.LastRunTime)"
               "last_result=$($info.LastTaskResult)"
               "next_run=$($info.NextRunTime)"
+              "description=$(($task.Description -replace '[\r\n]+', ' '))"
             }
             exit 0
 
@@ -294,6 +295,10 @@ public sealed record TaskSchedule
     public TimeSpan TimeLimit { get; init; } = TimeSpan.FromMinutes(30);
 
     public bool StartNow { get; init; } = true;
+
+    /// <summary>The schedule's fingerprint (<see cref="ScheduleSettings.Fingerprint"/>), recorded in the task's description
+    /// so <see cref="ScheduleDrift"/> can tell when the settings change. Null records nothing (as before v0.6).</summary>
+    public string? Fingerprint { get; init; }
 
     internal void Validate()
     {

@@ -91,6 +91,26 @@ using var run = Locks.Exclusive(name, 600, "triage run");   // win_background's 
 - **`Logger` writes a newline inside a message as CRLF,** as Python's text mode did: a multi-line message (a diff, a hook's output) has each LF written as CRLF in the file, and as the echo writer's own `NewLine`. **Before 13 Nov 2026 an LF inside a message was written as it was.** A caller that converted LF to CRLF itself (onenote-sync's port) must stop, or it gets CR CR LF.
 - **`Locks.Key` lower-cases as Python's `str.lower()` (v0.3),** through `PyStr.Lower` (WinBackground now references PyCompat), so a .NET and a Python tool always name the same lock. Before v0.3 it used .NET's invariant lower case, which differs only for U+0130 (capital I with dot) and a capital sigma ending a word: a key for a path with either of those changed with v0.3, and every other key is the same as before. Checked against `win_background.locks.key()` (`tests/WinBackground.Tests/V03Tests.cs`). One difference left: Python can't encode a lone surrogate and raises, where .NET hashes U+FFFD.
 
+#### [schedule]: the shared scheduling settings (v0.6, 22 Nov 2026)
+
+Every tool describes its task with one `[schedule]` table, the same keys everywhere, and `ScheduleSettings` builds the task from it:
+
+```toml
+[schedule]
+every_minutes = 15            # a job: how often the task runs it; a watcher: how often it polls (0 = not repeated)
+daily_at = "07:30"            # a job: daily at this time instead (not with every_minutes; every_minutes = 0 + daily_at is allowed)
+hours = "08:00-19:00"         # active window; a run outside it does nothing ("00:00-24:00" all day; may wrap past midnight)
+days = "Mon-Fri"              # active days: "Mon-Fri", "Mon,Wed,Fri" or ["Mon", "Wed"] (default every day)
+at_logon = true               # also at logon (default true; a watcher always starts at logon)
+after_unlock_minutes = 0      # a job: also this many minutes after each unlock (0, the default, is no unlock trigger)
+end_date = "2027-01-01"       # from this date a run does nothing
+```
+
+- **The tool passes its own defaults** (`ScheduleSettings.Parse(table, defaults, TaskKind.Job | Watcher, where)`), so a tool without the table behaves as before. The table is strict: an unknown key, a bad value, both `every_minutes` and `daily_at`, or a job with no trigger is a `FormatException` naming the file. A watcher can't take `daily_at`, `after_unlock_minutes` or `at_logon = false`.
+- **Registering:** `task.Enable(exe, args, dir, settings.ToTaskSchedule(kind, timeLimit, startNow))`.
+- **Each run gates itself:** `settings.IsActive(now, out why)` checks `hours`, `days` and `end_date`, so changing those needs no re-registration.
+- **Drift.** The trigger keys (a job's `every_minutes`, `daily_at`, `at_logon`, `after_unlock_minutes`) are fixed when the task is registered, so `ToTaskSchedule` records `settings.Fingerprint(kind)` in the task's description as `(schedule: v1 job every=15 daily=- logon=yes unlock=0)`. `ITask.Status()` now returns `description`, and `ScheduleDrift.Check(task, settings, kind)` (or `Check(status, fingerprint)`, for the watchdog) says `Matches`, `Changed`, `Unknown` (registered before fingerprints) or `NotRegistered`; `ScheduleDrift.Advice(state, tool)` is the line for `autostart status`: "settings changed since this task was registered: run `tool autostart on`".
+
 #### ITask's later members have defaults (v0.3)
 
 `Enable(..., TaskSchedule)` and `Start()` were added to `ITask` after the ports had written test fakes, and every fake broke. They now have default implementations: the scheduled `Enable` with `TaskSchedule.Watcher` calls the three-argument `Enable` (as `ScheduledTask` does), any other schedule throws `NotSupportedException`, and `Start()` throws `NotSupportedException`. A fake that needs them overrides them.
