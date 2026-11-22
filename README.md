@@ -16,7 +16,7 @@ Shared .NET libraries for a set of small personal background tools on Windows: w
 | `src/PeopleFirstClient` | People First (MHR's HR system) read as you through its web app's own single sign-on: a hidden Edge takes the token, then HttpClient reads the API. GETs, and one POST that's never resent. A port of `people-first-client` | Windows only (`net11.0-windows`) |
 | `src/ReviewQueue` | A review queue a session reads: one JSON file where background tools leave items for a person (or an assistant's next session) to look at and clear, written under a lock between processes and replaced atomically, in a format a Python program can share byte for byte | Windows only (`net11.0-windows`) |
 | `src/RepoCommit` | Committing exactly the files a tool wrote into a git repository, and nothing else, then pushing: git run as a child process, every pathspec literal, renames, another git's `index.lock` waited for, a push failure reported rather than thrown. Also a tool's `[git]` settings | Any (`net11.0`) |
-| `src/CalendarDays` | What a calendar says about a day: leave (your own entries by subject or category, with a minimum of hours), a day away working (a conference by name, or an event shown as working elsewhere), a weekend. The day rules the calendar tools share, so they agree on what counts. Pure: the tool reads the events | Any (`net11.0`) |
+| `src/CalendarDays` | What a calendar says about a day: leave (your own entries by subject or category, with a minimum of hours; half days and which half), bank holidays, the shared `[leave]` settings, your reports' leave titles, a day away working (a conference by name, or an event shown as working elsewhere), a weekend. The day rules the calendar tools share, so they agree on what counts. Pure: the tool reads the events | Any (`net11.0`) |
 
 Windows-only code lives in the Windows-only projects (`WinBackground`, `ClaudeHeadless`, `ReviewQueue` (for its lock), and `EdgeDevTools` and `PeopleFirstClient`, which drive Edge on Windows), so `M365Graph`, `PyCompat`, `RepoCommit` and `CalendarDays` can later build for other platforms, and any of them could become a NuGet package.
 
@@ -401,7 +401,7 @@ The tests run real git on temporary repositories: other changes left untouched, 
 
 ### CalendarDays
 
-The day rules work-location and out-of-office share, written once so the tools agree on what a day is. The tool reads
+The day rules work-location, out-of-office and meeting-preps share (and mail-triage is moving to), written once so the tools agree on what a day is. The tool reads
 its calendar and hands in the events as `DayEvent`s (local time; `Mine` for your own entries, `Attendees` not counting
 rooms).
 
@@ -418,6 +418,53 @@ DayRules.Weekend(day)
 - **A conference subject counts only on an all-day event** unless `SubjectsAllDayOnly = false`; then, like a show-as
   signal, it must cover `MinHours` of the day (0, the default: any length).
 - `Elsewhere`'s `notASignal` leaves out events whose show-as says nothing, such as a tool's own entries.
+
+#### `[leave]`: the shared leave settings
+
+Every tool that asks "is this a day off?" reads its `[leave]` table with `LeaveSettings.Parse(table, file, toolKeys,
+defaults)`, so the rules are written, and can be kept, once. With PyCompat's `BaseSettings`, a base file's `[leave]`
+fills in whatever a tool's own `[leave]` doesn't set (the tool must have the section, even empty; its own keys win).
+
+| Key | Meaning | Default |
+|---|---|---|
+| `subjects` | Your own entries whose subject matches are leave | `^\s*(holiday\b\|annual leave\|on leave\|summer holidays?)` |
+| `categories` | Your own entries in these categories are leave too | none |
+| `min_hours` | Leave covering this much of a day (or all day) makes it a day off; less is a half day | 6 |
+| `half_day` | A leave entry whose subject matches is a half day whatever its length | `\(half day\)` |
+| `bank_holiday_subjects` | Your own entries marking a bank holiday | `^\s*bank holiday\b` |
+| `bank_holiday_categories` | ... or in these categories | `["Bank holiday"]` |
+
+A tool's own keys (out-of-office's messages, meeting-preps' `min_working_days`) sit in the same table: it names them in
+`toolKeys`; anything else is an error. **A bank holiday is its own kind of day, not leave**, so "bank holiday" isn't in
+the default `subjects`; a tool that treats it as a day off says so.
+
+```csharp
+var leave = LeaveSettings.Parse(table, "x.toml", ["min_working_days"]);
+DayOffRules.Classify(leave, events, day)   // DayOff: Kind (None, BankHoliday, Leave, HalfDay), Half, Entry, Share (1, 0.5, 0)
+DayOffRules.HalfOf(entries, day, midday)   // HalfOfDay: Am, Pm or Unknown
+```
+
+`Classify` is out-of-office's and meeting-preps' rule: a bank holiday first; then leave, a half day when every entry
+says half day or the leave is under `min_hours`. **A half day says which half where it can**: from its subject ("AM",
+"(PM)", "from PM" on a longer entry's first day, "to AM" on its last, "morning", "afternoon"), else from its hours when
+it's a timed entry wholly before or after midday, else `Unknown` (People First's "Holiday (half day) (job title)" over
+the whole day doesn't say).
+
+#### `ReportLeaveTitles`: your reports' leave entries
+
+The one definition of the titles calendar-team-leave-sync writes for your reports' leave and mail-triage reads for the
+1:1 rules: "Dan Clark annual leave", "... (AM)" / "(PM)" for a single half day, "(from PM)" when a longer absence starts
+in the afternoon, "(to AM)" when it ends after the morning.
+
+```csharp
+var halves = ReportLeaveTitles.Halves(start, end, "HALF_PM", "FULL");    // People First's day parts
+ReportLeaveTitles.Format("{name} annual leave", "Dan Clark", halves)     // "Dan Clark annual leave (from PM)"
+ReportLeaveTitles.Parse("Dan Clark on leave PM", "Dan Clark")            // name, kind, Each "PM", First, Last
+ReportLeaveTitles.Markers("annual leave half day")                        // ("half", null, null): which half isn't known
+```
+
+`Parse` takes mail-triage's `leave_pattern` (`{name}` for the name) and reads hand-made titles with or without
+brackets. The tests format every combination team-leave can write and read each back to the same halves.
 
 ## Using it from a tool
 

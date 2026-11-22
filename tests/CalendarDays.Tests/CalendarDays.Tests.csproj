@@ -11,5 +11,6 @@
   </ItemGroup>
   <ItemGroup>
     <ProjectReference Include="..\..\src\CalendarDays\CalendarDays.csproj" />
+    <ProjectReference Include="..\..\src\PyCompat\PyCompat.csproj" />
   </ItemGroup>
 </Project>
