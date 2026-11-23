@@ -17,8 +17,9 @@ Shared .NET libraries for a set of small personal background tools on Windows: w
 | `src/ReviewQueue` | A review queue a session reads: one JSON file where background tools leave items for a person (or an assistant's next session) to look at and clear, written under a lock between processes and replaced atomically, in a format a Python program can share byte for byte | Windows only (`net11.0-windows`) |
 | `src/RepoCommit` | Committing exactly the files a tool wrote into a git repository, and nothing else, then pushing: git run as a child process, every pathspec literal, renames, another git's `index.lock` waited for, a push failure reported rather than thrown. Also a tool's `[git]` settings | Any (`net11.0`) |
 | `src/CalendarDays` | What a calendar says about a day: leave (your own entries by subject or category, with a minimum of hours; half days and which half), bank holidays, the shared `[leave]` settings, your reports' leave titles, a day away working (a conference by name, or an event shown as working elsewhere), a weekend. The day rules the calendar tools share, so they agree on what counts. Pure: the tool reads the events | Any (`net11.0`) |
+| `src/MeetingRooms` | Meeting rooms: a `[[rooms]]` list in settings, the order rooms are tried in (preferences, floors, the smallest that seats everyone), whether a room is free, whether a room's own schedule shows a given meeting, and rooms' schedules read through free/busy (Graph's getSchedule) | Any (`net11.0`) |
 
-Windows-only code lives in the Windows-only projects (`WinBackground`, `ClaudeHeadless`, `ReviewQueue` (for its lock), and `EdgeDevTools` and `PeopleFirstClient`, which drive Edge on Windows), so `M365Graph`, `PyCompat`, `RepoCommit` and `CalendarDays` can later build for other platforms, and any of them could become a NuGet package.
+Windows-only code lives in the Windows-only projects (`WinBackground`, `ClaudeHeadless`, `ReviewQueue` (for its lock), and `EdgeDevTools` and `PeopleFirstClient`, which drive Edge on Windows), so `M365Graph`, `PyCompat`, `RepoCommit`, `CalendarDays` and `MeetingRooms` can later build for other platforms, and any of them could become a NuGet package.
 
 All the libraries are AOT- and trim-checked (`IsAotCompatible`), build with warnings as errors, and publish under Native AOT with no warnings.
 
@@ -466,6 +467,23 @@ ReportLeaveTitles.Markers("annual leave half day")                        // ("h
 
 `Parse` takes mail-triage's `leave_pattern` (`{name}` for the name) and reads hand-made titles with or without
 brackets. The tests format every combination team-leave can write and read each back to the same halves.
+
+### MeetingRooms
+
+The room pieces a tool that books or suggests meeting rooms needs, written once (calendar-room-booking first; calendar-report's `slots` and mail-triage's `hold --room` can move onto it).
+
+```csharp
+var rooms = RoomList.Parse(raw["rooms"], settingsPath);                      // [[rooms]]: name, address, floor, capacity
+var order = RoomOrder.Rank(rooms, ["Booth 4.8", "Room 4.2"], ["4", "3"], seats: 2);   // RankedRoom(Room, Why)
+var schedules = new GraphRoomSchedules(graph, ["Calendars.Read"], zone).Read([.. rooms.Select(r => r.Address)], from, to);
+RoomSchedule.Free(schedules[address]!, start, end)
+RoomSchedule.Showing(schedules[address]!, start, end, organiserName, organiserAddress, subject)   // (ScheduleItem?, ShowingMatch)
+```
+
+- **`RoomList.Parse`** reads a `[[rooms]]` array strictly (an unknown key, no name or address, an address without an @, a capacity outside 1-1000, or the same room twice is a `FormatException` naming the file); `RoomList.Find` finds a room by name or address in any case.
+- **`RoomOrder.Rank`** gives the rooms that seat `seats` (a room of unknown capacity counts as fitting) in the order they're tried: the preferred names or addresses in order, then rooms on the listed floors in order, then the smallest of known size, then those of unknown size, then by name; each with why ("preference 1", "floor 3, seats 2").
+- **`RoomSchedule.Showing`** says whether a room's own schedule shows a meeting: an item at its times (to within a minute) not shown as free, whose subject names the organiser (many rooms show the organiser's name as the subject), or is the meeting's subject, or is blank (`Hidden`: the room hides subjects, so only the times matched). A room merely listed on someone's copy of a meeting may have declined; its schedule is what counts.
+- **`GraphRoomSchedules.Read`** posts `getSchedule` for up to 20 rooms at a time and 60 days at a time, as a read (`GraphRetryPolicy.Read`), with the times in the given zone; a room whose schedule comes back with an error is null, so it's never taken to be free.
 
 ## Using it from a tool
 

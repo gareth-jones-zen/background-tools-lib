@@ -1,0 +1,11 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!-- Meeting rooms: a [[rooms]] list in settings, the order rooms are tried in, whether a room is free, whether its
+       schedule shows a given meeting, and reading rooms' schedules through free/busy (Graph's getSchedule). Shared by the
+       tools that book or suggest rooms (calendar-room-booking first). Not Windows-specific. -->
+  <ItemGroup>
+    <ProjectReference Include="..\M365Graph\M365Graph.csproj" />
+  </ItemGroup>
+  <ItemGroup>
+    <InternalsVisibleTo Include="MeetingRooms.Tests" />
+  </ItemGroup>
+</Project>
