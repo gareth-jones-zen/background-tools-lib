@@ -22,14 +22,13 @@ namespace M365Graph;
 ///   can notify someone.
 /// - Scopes per call. Ask only for what a call needs, so a new consent for one tool never breaks another.
 /// - A timeout and retries for stalls, 429s and 5xx. A stalled connection once hung a run for 30 minutes.
+/// - A write is never resent once it may have reached Microsoft: a POST or PATCH is sent once unless the caller
+///   says it's safe to repeat (<see cref="GraphRetryPolicy"/>).
 /// - IPv4 first (<see cref="Net"/>), which fixed sign-ins that took minutes.</summary>
 public sealed class GraphClient
 {
     private static readonly HttpClient SharedHttp = Net.CreateHttpClient();
     private static readonly HttpClient SharedRawHttp = Net.CreateHttpClient(Net.CreateHandler(decompress: false));
-    private static readonly HashSet<HttpStatusCode> Retryable =
-        [HttpStatusCode.TooManyRequests, HttpStatusCode.InternalServerError, HttpStatusCode.BadGateway,
-         HttpStatusCode.ServiceUnavailable, HttpStatusCode.GatewayTimeout];
 
     private readonly HttpClient http;
     private readonly HttpClient rawHttp;
@@ -96,23 +95,28 @@ public sealed class GraphClient
     }
 
     /// <summary>One Graph request, as JSON (an empty object for an empty reply). url may be relative ("/me") or a
-    /// full URL (such as an @odata.nextLink).</summary>
+    /// full URL (such as an @odata.nextLink).
+    /// <para>Retried as policy says, by default <see cref="GraphRetryPolicy.For"/> the method: a GET, PUT or DELETE
+    /// is retried; a POST or PATCH is sent once, and a 5xx, a timeout or a dropped connection after sending throws
+    /// <see cref="GraphDeliveryUnknownException"/> (it may have been applied). Pass <see cref="GraphRetryPolicy.Read"/>
+    /// for a POST or PATCH that's safe to repeat.</para></summary>
     public async Task<JsonObject> RequestAsync(string url, HttpMethod? method = null, JsonNode? body = null,
         IEnumerable<string>? scopes = null, IReadOnlyDictionary<string, string>? headers = null, bool? interactive = null,
-        CancellationToken cancel = default)
+        CancellationToken cancel = default, GraphRetryPolicy? policy = null)
     {
-        var raw = await SendAsync(url, method ?? HttpMethod.Get, body?.ToJsonString(), scopes, headers, interactive, cancel).ConfigureAwait(false);
+        var raw = await SendAsync(url, method ?? HttpMethod.Get, body?.ToJsonString(), scopes, headers, interactive, policy, cancel).ConfigureAwait(false);
         if (raw.Length == 0)
             return [];
         return JsonNode.Parse(raw) as JsonObject ?? throw new JsonException($"Graph didn't return a JSON object for {url}.");
     }
 
-    /// <summary>One Graph request, read into a type through System.Text.Json source generation (AOT-safe).</summary>
+    /// <summary>One Graph request, read into a type through System.Text.Json source generation (AOT-safe). Retried as
+    /// the other RequestAsync.</summary>
     public async Task<T?> RequestAsync<T>(string url, JsonTypeInfo<T> type, HttpMethod? method = null, JsonNode? body = null,
         IEnumerable<string>? scopes = null, IReadOnlyDictionary<string, string>? headers = null, bool? interactive = null,
-        CancellationToken cancel = default)
+        CancellationToken cancel = default, GraphRetryPolicy? policy = null)
     {
-        var raw = await SendAsync(url, method ?? HttpMethod.Get, body?.ToJsonString(), scopes, headers, interactive, cancel).ConfigureAwait(false);
+        var raw = await SendAsync(url, method ?? HttpMethod.Get, body?.ToJsonString(), scopes, headers, interactive, policy, cancel).ConfigureAwait(false);
         return raw.Length == 0 ? default : JsonSerializer.Deserialize(raw, type);
     }
 
@@ -148,11 +152,13 @@ public sealed class GraphClient
         }
     }
 
-    /// <summary>The request, with a timeout per try and up to three tries for 429, 5xx and dropped connections.
-    /// A 429 or 503's Retry-After is honoured; otherwise 5 s, then 10 s.</summary>
+    /// <summary>The request, with a timeout per try, retried as the policy says (by default, from the method). A
+    /// Retry-After is honoured; otherwise 5 s, then 10 s.</summary>
     private async Task<byte[]> SendAsync(string url, HttpMethod method, string? body, IEnumerable<string>? scopes,
-        IReadOnlyDictionary<string, string>? headers, bool? interactive, CancellationToken cancel)
+        IReadOnlyDictionary<string, string>? headers, bool? interactive, GraphRetryPolicy? policy, CancellationToken cancel)
     {
+        policy ??= GraphRetryPolicy.For(method);
+        var given = url;
         if (!url.StartsWith("http", StringComparison.Ordinal))
             url = Graph.BaseUrl + url;
         var scopeList = scopes?.ToList();
@@ -181,12 +187,24 @@ public sealed class GraphClient
                         Log($"slow Graph call: {started.Elapsed.TotalSeconds:0}s {method} {GraphRequestException.Shorten(url)}");
                     return raw;
                 }
-                if (!Retryable.Contains(response.StatusCode) || attempt == Graph.Retries)
+                if (AlreadyDeleted(method, response.StatusCode, attempt, url))
+                    return [];
+                var status = (int)response.StatusCode;
+                if (!policy.Statuses.Contains(status) || attempt >= policy.Tries)
+                {
+                    if (!policy.ResendAfterDelivery && status >= 500)
+                        throw new GraphDeliveryUnknownException(method.Method, given, response.StatusCode, Encoding.UTF8.GetString(raw));
                     throw new GraphRequestException(response.StatusCode, method.Method, url, Encoding.UTF8.GetString(raw));
+                }
                 wait = RetryAfter(response) ?? TimeSpan.FromSeconds(5 * attempt);
             }
-            catch (Exception error) when (error is not GraphRequestException && attempt < Graph.Retries && Net.IsNetworkError(error, cancel))
+            catch (Exception error) when (error is not GraphRequestException and not GraphDeliveryUnknownException
+                                          && Net.IsNetworkError(error, cancel))
             {
+                if (!policy.ResendAfterDelivery && !Net.NeverSent(error))
+                    throw new GraphDeliveryUnknownException(method.Method, given, error);
+                if (attempt >= policy.Tries)
+                    throw;
                 wait = TimeSpan.FromSeconds(5 * attempt);
             }
             Log($"Graph retry {attempt} in {wait.TotalSeconds:0}s: {method} {GraphRequestException.Shorten(url)}");
@@ -199,16 +217,17 @@ public sealed class GraphClient
     /// compression asked for. For content that isn't JSON (a OneNote page's HTML) and for bodies that have to be
     /// byte for byte what the Python version sent.
     /// <para>The reply comes back whatever its status: a status the policy doesn't retry, or one that still failed
-    /// after its tries, is returned for the caller to judge, not thrown. Network failures are retried as the policy
-    /// says, and the last one is thrown; a request the policy won't resend, that may have been delivered, throws
-    /// <see cref="GraphDeliveryUnknownException"/>. A Retry-After (seconds or a date) is honoured, otherwise the
-    /// waits are 5 s, 10 s, 15 s and so on. Retries are logged through the options' Log, as other calls' are.
-    /// Default policy: <see cref="GraphRetryPolicy.Read"/>.</para></summary>
+    /// after its tries, is returned for the caller to judge, not thrown, except that a 5xx to a request the policy
+    /// won't resend throws <see cref="GraphDeliveryUnknownException"/>, as does a timeout or a dropped connection
+    /// after sending one (it may have been applied). Network failures are otherwise retried as the policy says, and
+    /// the last one is thrown. A Retry-After (seconds or a date) is honoured, otherwise the waits are 5 s, 10 s, 15 s
+    /// and so on. Retries are logged through the options' Log, as other calls' are.
+    /// Default policy: <see cref="GraphRetryPolicy.For"/> the method (a POST or PATCH is sent once).</para></summary>
     public async Task<GraphRawResponse> SendRawAsync(HttpMethod method, string url, byte[]? body = null, string? contentType = null,
         GraphRetryPolicy? policy = null, IEnumerable<string>? scopes = null, IReadOnlyDictionary<string, string>? headers = null,
         CancellationToken cancel = default)
     {
-        policy ??= GraphRetryPolicy.Read;
+        policy ??= GraphRetryPolicy.For(method);
         var full = url.StartsWith("http", StringComparison.Ordinal) ? url : Graph.BaseUrl + url;
         var scopeList = scopes?.ToList();
         for (var attempt = 1; ; attempt++)
@@ -234,11 +253,17 @@ public sealed class GraphClient
                 using var response = await rawHttp.SendAsync(request, cancel).ConfigureAwait(false);
                 var raw = await response.Content.ReadAsByteArrayAsync(cancel).ConfigureAwait(false);
                 var status = (int)response.StatusCode;
+                if (AlreadyDeleted(method, response.StatusCode, attempt, full))
+                    return new GraphRawResponse(HttpStatusCode.NoContent, [], null);
                 if (response.IsSuccessStatusCode || !policy.Statuses.Contains(status) || attempt >= policy.Tries)
+                {
+                    if (!response.IsSuccessStatusCode && !policy.ResendAfterDelivery && status >= 500)
+                        throw new GraphDeliveryUnknownException(method.Method, url, response.StatusCode, Encoding.UTF8.GetString(raw));
                     return new GraphRawResponse(response.StatusCode, raw, ContentTypeOf(response));
+                }
                 wait = RetryAfter(response) ?? TimeSpan.FromSeconds(5 * attempt);
             }
-            catch (Exception error) when (Net.IsNetworkError(error, cancel))
+            catch (Exception error) when (error is not GraphDeliveryUnknownException && Net.IsNetworkError(error, cancel))
             {
                 if (!policy.ResendAfterDelivery && !Net.NeverSent(error))
                     throw new GraphDeliveryUnknownException(method.Method, url, error);
@@ -249,6 +274,16 @@ public sealed class GraphClient
             Log($"Graph retry {attempt} in {wait.TotalSeconds:0}s: {method} {GraphRequestException.Shorten(full)}");
             await delay(wait, cancel).ConfigureAwait(false);
         }
+    }
+
+    /// <summary>A DELETE that was retried and now finds nothing there: the earlier try was applied (its answer was
+    /// lost), so it counts as done.</summary>
+    private bool AlreadyDeleted(HttpMethod method, HttpStatusCode status, int attempt, string url)
+    {
+        if (method != HttpMethod.Delete || attempt == 1 || status != HttpStatusCode.NotFound)
+            return false;
+        Log($"Graph: DELETE {GraphRequestException.Shorten(url)} found it gone on try {attempt}; the earlier try was applied");
+        return true;
     }
 
     private static string? ContentTypeOf(HttpResponseMessage response) =>

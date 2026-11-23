@@ -92,11 +92,12 @@ public class RawAndHandlerTests
     [Fact]
     public async Task A_patch_is_sent_once_with_the_exact_content_type()
     {
-        var (client, handler, _, _) = Make((_, _) => Answer(HttpStatusCode.BadGateway));
+        var (client, handler, _, _) = Make((_, _) => Answer(HttpStatusCode.BadGateway, Encoding.UTF8.GetBytes("busy")));
         var body = Encoding.UTF8.GetBytes("[{\"target\": \"ul:1\"}]");
-        var reply = await client.SendRawAsync(HttpMethod.Patch, "/p/content", body, "application/json", Write5,
-            cancel: TestContext.Current.CancellationToken);
-        Assert.Equal(HttpStatusCode.BadGateway, reply.Status);   // the caller decides what a 5xx on a write means
+        var unknown = await Assert.ThrowsAsync<GraphDeliveryUnknownException>(() => client.SendRawAsync(HttpMethod.Patch, "/p/content",
+            body, "application/json", Write5, cancel: TestContext.Current.CancellationToken));
+        Assert.Equal(HttpStatusCode.BadGateway, unknown.Status);   // a 5xx to a write: it may have been applied
+        Assert.Equal("busy", unknown.Body);
         Assert.Single(handler.Requests);
         Assert.Equal("application/json", handler.Requests[0].ContentType);   // no "; charset=utf-8"
         Assert.Equal(body, handler.Requests[0].Body);

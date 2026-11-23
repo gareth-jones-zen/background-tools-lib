@@ -49,7 +49,7 @@ public sealed class PyTomlTests
 public sealed class PyTomlRealSettingsTests
 {
     private static readonly string Tools = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
-        "OneDrive - Zen Internet", "claude-executive-assistant", "tools");
+        "OneDrive - Zen Internet", "claude-executive-assistant", "config");
 
     [Fact]
     public void The_EA_settings_read_the_same_as_before()
