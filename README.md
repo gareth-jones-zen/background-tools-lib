@@ -15,11 +15,12 @@ Shared .NET libraries for a set of small personal background tools on Windows: w
 | `src/EdgeDevTools` | The installed Microsoft Edge driven over the DevTools protocol through a pipe, with no Playwright or Node: launch on a profile, pages, script, clicks, request headers, a clean close, and Edge ending with the process that started it. Also the Edge profile's lock key (the same as the Python tools') and Microsoft sign-in page recognition | Windows only (`net11.0-windows`) |
 | `src/PeopleFirstClient` | People First (MHR's HR system) read as you through its web app's own single sign-on: a hidden Edge takes the token, then HttpClient reads the API. GETs, and one POST that's never resent. A port of `people-first-client` | Windows only (`net11.0-windows`) |
 | `src/ReviewQueue` | A review queue a session reads: one JSON file where background tools leave items for a person (or an assistant's next session) to look at and clear, written under a lock between processes and replaced atomically, in a format a Python program can share byte for byte | Windows only (`net11.0-windows`) |
+| `src/ActivityJournal` | A shared journal of what background tools did: one JSON line per action (when, tool, what, subject, rule, why, the item's id, an undo command, sensitivity) appended to one file under a lock between processes, pruned after 90 days, and read back by time and tool, for a "while you were away" view | Windows only (`net11.0-windows`) |
 | `src/RepoCommit` | Committing exactly the files a tool wrote into a git repository, and nothing else, then pushing: git run as a child process, every pathspec literal, renames, another git's `index.lock` waited for, a push failure reported rather than thrown. Also a tool's `[git]` settings | Any (`net11.0`) |
 | `src/CalendarDays` | What a calendar says about a day: leave (your own entries by subject or category, with a minimum of hours; half days and which half), bank holidays, the shared `[leave]` settings, your reports' leave titles, a day away working (a conference by name, or an event shown as working elsewhere), a weekend. The day rules the calendar tools share, so they agree on what counts. Pure: the tool reads the events | Any (`net11.0`) |
 | `src/MeetingRooms` | Meeting rooms: a `[[rooms]]` list in settings, the order rooms are tried in (preferences, floors, the smallest that seats everyone), whether a room is free, whether a room's own schedule shows a given meeting, and rooms' schedules read through free/busy (Graph's getSchedule) | Any (`net11.0`) |
 
-Windows-only code lives in the Windows-only projects (`WinBackground`, `ClaudeHeadless`, `ReviewQueue` (for its lock), and `EdgeDevTools` and `PeopleFirstClient`, which drive Edge on Windows), so `M365Graph`, `PyCompat`, `RepoCommit`, `CalendarDays` and `MeetingRooms` can later build for other platforms, and any of them could become a NuGet package.
+Windows-only code lives in the Windows-only projects (`WinBackground`, `ClaudeHeadless`, `ReviewQueue` and `ActivityJournal` (for their locks), and `EdgeDevTools` and `PeopleFirstClient`, which drive Edge on Windows), so `M365Graph`, `PyCompat`, `RepoCommit`, `CalendarDays` and `MeetingRooms` can later build for other platforms, and any of them could become a NuGet package.
 
 All the libraries are AOT- and trim-checked (`IsAotCompatible`), build with warnings as errors, and publish under Native AOT with no warnings.
 
@@ -350,6 +351,52 @@ review?.Open().Add(review.Source, "added", fields);
 
 The tests check ids and the file's bytes against values computed by Python (pinned, so they run on CI) and, where Python and a win-background checkout are found (`REVIEW_QUEUE_PYTHON`, `WIN_BACKGROUND_SRC`, or the usual places), against a Python implementation of the same format (`tests/ReviewQueue.Tests/reference_queue.py`): each reads and rewrites the other's file byte for byte, they take each other's lock, and they write at the same moment without losing an item.
 
+### ActivityJournal
+
+**One shared record of what the tools did**, for a person (or the screen that shows them "while you were away") to read back: one JSON line per thing done, every tool appending to the same file, `%EA_LOCAL%\journal.jsonl` by convention (`Journal.FileName`).
+
+```csharp
+using ActivityJournal;
+
+var journal = new Journal(@"C:\Users\you\AppData\Local\my-tools\journal.jsonl");
+journal.TryWrite(new JournalEntry
+{
+    Tool = "mail-triage", What = "delete", Subject = "Your weekly digest", Rule = "Newsletters", Why = "Read on the web if at all",
+    Item = "<abc@mail.example.com>", Undo = "mail-triage restore 0d1e2f3a4b5c", Sensitivity = Sensitivity.Private,
+}, problem: log);                                               // never throws: the action has already happened
+
+var overnight = journal.Read(since: DateTimeOffset.Now.AddHours(-12));          // every tool's, oldest first
+var mail = journal.Read(since: lastLook, tool: "mail-triage");
+```
+
+```json
+{"id":"3f9c0a1b2c4d","when":"2026-11-25T07:42:10.512+00:00","tool":"mail-triage","what":"delete","by":"auto","subject":"Your weekly digest","rule":"Newsletters","why":"Read on the web if at all","item":"<abc@mail.example.com>","undo":"mail-triage restore 0d1e2f3a4b5c","sensitivity":"private"}
+```
+
+**The format** (JSON Lines: UTF-8 with no byte order mark, one object per line, each ending in LF; keys in this order; an optional field that's null is left out):
+
+| Field | | What it holds |
+|---|---|---|
+| `id` | always | 12 hex characters, random, made when the line is written: for a reader to remember what it has shown |
+| `when` | always | ISO 8601 to the millisecond, with the writer's offset (`2026-11-25T07:42:10.512+00:00`) |
+| `tool` | always | the tool's name, as its exe is called |
+| `what` | always | a short verb of the tool's own: `delete`, `file`, `accept`, `move`, `keep`... (each tool documents its own) |
+| `by` | always | `auto` (the tool on its own: a rule, a watcher's pass) or `hand` (a person, through one of its commands) |
+| `subject` | optional | what it was done to, **only where the tool already shows it** (an email's subject, a meeting's title) |
+| `rule` | optional | the rule's name, or what it was for something done by hand |
+| `why` | optional | the rule's reason as the person wrote it, or the tool's own (a check's result) |
+| `item` | optional | the item's or message's id, to find it again (an internet message ID, an event id) |
+| `undo` | optional | a command that undoes it, where there is one; left out when it can't be undone by a command (it told someone) |
+| `sensitivity` | always | `normal` (show it), `private` (hide the subject when others can see the screen) or `restricted` (hide the line) |
+| `outcome` | optional | `unconfirmed` when it was sent but not confirmed, so it may or may not have happened; left out when it was done |
+
+- **Never a message body**, and no field for one. Text fields are cut at 1,000 characters; a newline inside one is escaped, so a line is always one line.
+- **Writes take a lock between processes** (`NamedLock`, `Local\{name}`, by default the folder and file name lower-cased: `...\my-right-hand\journal.jsonl` is `my-right-hand-journal`) and append one whole line. A last line a crashed writer left with no newline is ended before the next line, and left out by readers.
+- **`Read(since, tool)` takes no lock**: it reads the file shared (so it never holds up a writer, or the pruning move) and leaves out anything that isn't a whole journal line. A field it doesn't know is ignored, so an older reader reads a newer writer's lines; a sensitivity it doesn't know reads as `restricted`.
+- **Pruned after `KeepDays` (90 by default)**: a write whose first line is more than KeepDays and a day old rewrites the file without the old lines (a temporary file, then one move), so about once a day. If something holds the file open without sharing deletion, the move is refused and pruning waits for a later write; nothing is lost. `Prune()` does it now.
+- **`Write`** throws for a line that isn't valid (no tool or what, an unknown `sensitivity` or `by`), a lock held too long (`TimeoutException`) or a file that can't be written; **`TryWrite`** never throws, and says why through its callback: a tool calls it after the action, which has happened whatever the journal does.
+- **Who writes it** is the tool, after each thing it did (not a dry run or a preview); each tool's README lists its `what`s, and its `undo` commands.
+
 ### RepoCommit
 
 **Commits exactly the files a tool wrote into a git repository, and nothing else**, then optionally pushes. For a tool that writes into a repository someone also works in by hand: whatever else is changed or staged there is left exactly as it was.
@@ -516,7 +563,7 @@ dotnet test -c Release
 
 `tests/M365Graph.Tests` has one live test against the real Graph, skipped unless `M365GRAPH_LIVE_CACHE` names a token cache file (and `M365GRAPH_LIVE_TENANT` its tenant). It copies the file first and works on the copy, silently only, and reads only `/me`.
 
-`tests/LockHelper` is a small console used by the lock and `Shell.Run` tests as another process. CI also publishes it with Native AOT and runs `async` (the locks) and `aot-smoke` (the PyCompat, WinBackground and M365Graph additions of 13 Nov 2026, with a fake Graph handler and no network, ReviewQueue on a temporary folder, and RepoCommit on a temporary repository) under AOT.
+`tests/LockHelper` is a small console used by the lock and `Shell.Run` tests as another process. CI also publishes it with Native AOT and runs `async` (the locks) and `aot-smoke` (the PyCompat, WinBackground and M365Graph additions of 13 Nov 2026, with a fake Graph handler and no network, ReviewQueue and ActivityJournal on a temporary folder, and RepoCommit on a temporary repository) under AOT.
 
 `tests/PyCompat.Tests/MergedTests.cs` holds the ports' tests for the merged helpers and the checks against the Python-generated tables; one compares `PyPath.Resolve` with `pathlib` and is skipped where `python` isn't on the `PATH`.
 

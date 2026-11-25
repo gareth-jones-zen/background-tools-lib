@@ -3,6 +3,7 @@
     <Project Path="src/ClaudeHeadless.Background/ClaudeHeadless.Background.csproj" />
     <Project Path="src/ClaudeHeadless.Console/ClaudeHeadless.Console.csproj" />
     <Project Path="src/ClaudeHeadless/ClaudeHeadless.csproj" />
+    <Project Path="src/ActivityJournal/ActivityJournal.csproj" />
     <Project Path="src/CalendarDays/CalendarDays.csproj" />
     <Project Path="src/EdgeDevTools/EdgeDevTools.csproj" />
     <Project Path="src/M365Graph/M365Graph.csproj" />
@@ -14,6 +15,7 @@
     <Project Path="src/WinBackground/WinBackground.csproj" />
   </Folder>
   <Folder Name="/tests/">
+    <Project Path="tests/ActivityJournal.Tests/ActivityJournal.Tests.csproj" />
     <Project Path="tests/CalendarDays.Tests/CalendarDays.Tests.csproj" />
     <Project Path="tests/ClaudeHeadless.Tests/ClaudeHeadless.Tests.csproj" />
     <Project Path="tests/EdgeDevTools.Tests/EdgeDevTools.Tests.csproj" />

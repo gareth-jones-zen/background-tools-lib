@@ -1,6 +1,7 @@
 using System.Net;
 using System.Text;
 using System.Text.Json.Nodes;
+using ActivityJournal;
 using M365Graph;
 using PyCompat;
 using RepoCommit;
@@ -9,7 +10,7 @@ using WinBackground;
 
 /// <summary>LockHelper aot-smoke: the 13 Nov 2026 additions run once each under Native AOT (the regex interpreter,
 /// the kernel32 imports behind PyPath.Resolve, the generated entity table, a raw Graph call over a fake handler,
-/// Shell.Run with UTF-8 stdin), and ReviewQueue and RepoCommit (git on the PATH). Prints "ok", or what went wrong and exits 1. No network: the handler is fake.</summary>
+/// Shell.Run with UTF-8 stdin), and ReviewQueue, ActivityJournal and RepoCommit (git on the PATH). Prints "ok", or what went wrong and exits 1. No network: the handler is fake.</summary>
 internal static class AotSmoke
 {
     public static async Task<int> Run()
@@ -59,6 +60,19 @@ internal static class AotSmoke
         finally
         {
             Directory.Delete(folder, true);
+        }
+
+        // ActivityJournal: a line written through the lock and read back, filtered by tool.
+        var journalFolder = Directory.CreateTempSubdirectory("aot-journal-").FullName;
+        try
+        {
+            var journal = new Journal(Path.Combine(journalFolder, "journal.jsonl"), "aot-journal-" + Environment.ProcessId);
+            var line = journal.Write(new JournalEntry { Tool = "t", What = "delete", Subject = "é", Sensitivity = Sensitivity.Private, Undo = "t restore 1" });
+            Check(journal.Read(tool: "t").SingleOrDefault() == line && journal.Read(tool: "other").Count == 0, "ActivityJournal");
+        }
+        finally
+        {
+            Directory.Delete(journalFolder, true);
         }
 
         // RepoCommit: [git] read from JSON, and one file committed in a new repository (git on the PATH, as on CI).

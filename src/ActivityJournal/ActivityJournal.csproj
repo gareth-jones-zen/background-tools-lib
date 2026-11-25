@@ -1,0 +1,15 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!-- A shared journal of what background tools did: one JSON line per action, appended under a lock between
+       processes, pruned after a number of days, read back by time and tool (an assistant's "while you were away"
+       view). Windows only, for the lock (WinBackground's NamedLock). -->
+  <PropertyGroup>
+    <TargetFramework>net11.0-windows</TargetFramework>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\WinBackground\WinBackground.csproj" />
+    <ProjectReference Include="..\PyCompat\PyCompat.csproj" />
+  </ItemGroup>
+  <ItemGroup>
+    <InternalsVisibleTo Include="ActivityJournal.Tests" />
+  </ItemGroup>
+</Project>

@@ -1,7 +1,7 @@
 <Project Sdk="Microsoft.NET.Sdk">
   <!-- A child process for the lock and Shell.Run tests, and the Native AOT check: CI publishes it with AOT (a
        warning fails the build) and runs its async and aot-smoke modes, which exercise NamedLock, and the PyCompat,
-       WinBackground and M365Graph additions of 13 Nov 2026, ReviewQueue and RepoCommit, under AOT. Not shipped. -->
+       WinBackground and M365Graph additions of 13 Nov 2026, ReviewQueue, ActivityJournal and RepoCommit, under AOT. Not shipped. -->
   <PropertyGroup>
     <TargetFramework>net11.0-windows</TargetFramework>
     <OutputType>Exe</OutputType>
@@ -13,6 +13,7 @@
     <ProjectReference Include="..\..\src\PyCompat\PyCompat.csproj" />
     <ProjectReference Include="..\..\src\M365Graph\M365Graph.csproj" />
     <ProjectReference Include="..\..\src\ReviewQueue\ReviewQueue.csproj" />
+    <ProjectReference Include="..\..\src\ActivityJournal\ActivityJournal.csproj" />
     <ProjectReference Include="..\..\src\RepoCommit\RepoCommit.csproj" />
   </ItemGroup>
 </Project>
